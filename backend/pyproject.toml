@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clipboard-sync-backend"
+version = "0.1.0"
+description = "Django backend for the Clipboard Sync POC"
+requires-python = ">=3.11"
+dependencies = [
+    "Django>=5.1,<6",
+    "djangorestframework>=3.15,<4",
+]
+
+[project.optional-dependencies]
+
+[tool.setuptools.packages.find]
+include = ["config*", "clipboard*"]

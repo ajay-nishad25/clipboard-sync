@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+**/.venv/
+venv/
+env/
+
+# Django
+*.sqlite3
+staticfiles/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Android / Gradle / Android Studio
+.gradle/
+build/
+**/build/
+local.properties
+*.iml
+.idea/
+captures/
+
+# Editors and operating systems
+.vscode/
+.DS_Store
+Thumbs.db
