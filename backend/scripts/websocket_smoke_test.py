@@ -1,4 +1,20 @@
-"""Temporary-development-style client for manually checking the Phase 4 endpoint."""
+"""Development-only smoke test for the Phase 4 WebSocket endpoint.
+
+Run this script while the Daphne dev server is running:
+
+    python manage.py runserver
+
+Then in a second terminal:
+
+    python scripts/websocket_smoke_test.py
+
+The URL defaults to ws://127.0.0.1:8000/ws/clipboard/?device_id=desktop-001.
+Override it with the WEBSOCKET_SMOKE_URL environment variable if port 8000 is
+occupied:
+
+    $env:WEBSOCKET_SMOKE_URL = "ws://127.0.0.1:8001/ws/clipboard/?device_id=desktop-001"
+    python scripts/websocket_smoke_test.py
+"""
 
 from __future__ import annotations
 

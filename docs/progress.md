@@ -4,7 +4,7 @@
 - [x] Phase 1 — Desktop Clipboard Detection
 - [x] Phase 2 — Django Backend
 - [x] Phase 3 — Desktop Agent to Backend
-- [ ] Phase 4 — WebSocket Infrastructure
+- [x] Phase 4 — WebSocket Infrastructure
 - [ ] Phase 5 — Desktop Real-Time Sync
 - [ ] Phase 6 — Android Application
 - [ ] Phase 7 — Android Clipboard Integration
@@ -35,3 +35,27 @@ Connected the desktop agent to the Django create-entry API through HTTP. Each
 distinct non-empty text clipboard value is sent as JSON with development device
 ID `desktop-001`. Network and backend failures are logged without stopping the
 agent; failed values are not retried or queued.
+
+## Phase 4 outcome
+
+Added Django Channels WebSocket infrastructure to the backend. The server now
+runs under Daphne, which handles both HTTP and WebSocket connections on the same
+port. Key additions:
+
+- `clipboard/consumers.py` — `ClipboardConsumer` accepts connections, validates
+  `test.message` payloads, returns `test.ack` responses, and returns structured
+  errors for invalid input.
+- `clipboard/routing.py` — maps `ws/clipboard/` to `ClipboardConsumer`.
+- `config/asgi.py` — `ProtocolTypeRouter` routes HTTP to Django and WebSocket
+  to `ClipboardConsumer`.
+- `config/settings.py` — `daphne` and `channels` added to `INSTALLED_APPS`,
+  `ASGI_APPLICATION` and `InMemoryChannelLayer` enabled.
+- `clipboard/tests_websocket.py` — 5 automated tests covering connect,
+  disconnect, valid message, malformed JSON, unsupported type, and missing
+  field.
+- `scripts/websocket_smoke_test.py` — development-only script for manual
+  end-to-end validation.
+
+All 5 existing REST tests continue to pass. The desktop agent remains HTTP-only
+and its 17 unit tests are unaffected. No real clipboard synchronization,
+authentication, Redis, or broadcast logic was added.

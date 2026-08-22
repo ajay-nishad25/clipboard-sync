@@ -20,8 +20,41 @@ Phase 3 connects `desktop-agent/` to `POST /api/clipboard/` with `requests`.
 The default settings are the local endpoint, device ID `desktop-001`, and a
 five-second timeout; all are overridable through environment variables. Unit
 tests mock HTTP calls, while the integration instructions start both local
-components. There is still no WebSocket, Channels, Android application,
-authentication, retry queue, or multi-device synchronization.
+components.
+
+Phase 4 adds Django Channels WebSocket infrastructure to the backend. The
+server is now run by Daphne (installed into the backend venv). The ASGI
+application routes HTTP to Django and WebSocket connections to
+`ClipboardConsumer`. A `test.message` round-trip validates the plumbing;
+real clipboard synchronization belongs to Phase 5.
+
+### Phase 4 backend setup
+
+Install Channels and Daphne into the backend venv if not already present:
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+python -m pip install channels daphne
+```
+
+Start the server (Daphne takes over `runserver` automatically):
+
+```powershell
+python manage.py runserver
+```
+
+Run all automated tests (REST + WebSocket, 10 total):
+
+```powershell
+python manage.py test
+```
+
+Run the WebSocket smoke test (server must be running):
+
+```powershell
+python scripts/websocket_smoke_test.py
+```
 
 ## Future local development direction
 

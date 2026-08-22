@@ -1,4 +1,4 @@
-"""WebSocket consumer used to verify Channels infrastructure."""
+"""WebSocket consumer for the clipboard application."""
 
 from __future__ import annotations
 
