@@ -6,13 +6,21 @@ import json
 import logging
 from urllib.parse import parse_qs
 
+from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+
+from clipboard.models import ClipboardEntry
 
 logger = logging.getLogger(__name__)
 
 
 class ClipboardConsumer(AsyncWebsocketConsumer):
-    """Accept test messages without performing clipboard synchronization."""
+    """Handle WebSocket connections for clipboard synchronization.
+
+    Supported message types:
+    - test.message  — Phase 4 connectivity test, echoes back a test.ack.
+    - clipboard.update — Phase 5: store text clipboard content and return clipboard.ack.
+    """
 
     async def connect(self) -> None:
         self.device_id = self._get_device_id()
@@ -43,21 +51,56 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
             return
 
         message_type = message.get("type")
-        if message_type != "test.message":
+        if message_type == "test.message":
+            await self._handle_test_message(message)
+        elif message_type == "clipboard.update":
+            await self._handle_clipboard_update(message)
+        else:
             logger.warning("Unsupported WebSocket message type from device %s.", self.device_id or "unknown")
-            await self._send_error("unsupported_type", "Only test.message is supported in Phase 4.")
-            return
+            await self._send_error(
+                "unsupported_type",
+                "Supported message types: test.message, clipboard.update.",
+            )
 
+    async def _handle_test_message(self, message: dict) -> None:
         text = message.get("message")
         if not isinstance(text, str) or not text:
             await self._send_error("invalid_message", "test.message requires a non-empty text message.")
             return
 
         logger.info("WebSocket test message received from device %s.", self.device_id or "unknown")
-        await self.send(
-            text_data=json.dumps({"type": "test.ack", "message": text}),
-        )
+        await self.send(text_data=json.dumps({"type": "test.ack", "message": text}))
         logger.info("WebSocket acknowledgement sent to device %s.", self.device_id or "unknown")
+
+    async def _handle_clipboard_update(self, message: dict) -> None:
+        device_id = message.get("device_id")
+        if not isinstance(device_id, str) or not device_id.strip():
+            await self._send_error(
+                "invalid_message",
+                "clipboard.update requires a non-empty device_id string.",
+            )
+            return
+
+        content = message.get("content")
+        if not isinstance(content, str) or not content:
+            await self._send_error(
+                "invalid_content",
+                "Clipboard content must be a non-empty string.",
+            )
+            return
+
+        await database_sync_to_async(ClipboardEntry.objects.create)(
+            device_id=device_id,
+            content=content,
+        )
+        logger.info("Clipboard entry stored from device %s via WebSocket.", device_id)
+
+        await self.send(
+            text_data=json.dumps(
+                {"type": "clipboard.ack", "device_id": device_id, "status": "stored"}
+            )
+        )
+        logger.info("Clipboard acknowledgement sent to device %s.", device_id)
 
     def _get_device_id(self) -> str | None:
         query = parse_qs(self.scope["query_string"].decode("utf-8"))

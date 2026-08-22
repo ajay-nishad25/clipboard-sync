@@ -2,55 +2,71 @@
 
 ## HTTP API (Phases 2–3, unchanged)
 
-Phase 2 provides development/testing endpoints only:
+- `POST /api/clipboard/` — create a clipboard entry.
+- `GET /api/clipboard/latest/` — return the most recently created entry.
 
-- `POST /api/clipboard/` creates a plain-text clipboard entry.
-- `GET /api/clipboard/latest/` returns the most recently created entry, or
-  `404 Not Found` when none exists.
-
-The API has no authentication or client integration.
-
-### Create request and response
+### Create request
 
 ```json
-{
-  "device_id": "desktop-001",
-  "content": "Hello World"
-}
+{"device_id": "desktop-001", "content": "Hello World"}
 ```
 
-Both fields are required. `content` must be a non-empty JSON string. A
-successful request returns `201 Created` and includes the server-generated `id`
-and `created_at` fields.
+Both fields required. `content` must be a non-empty JSON string. Returns
+`201 Created` with `id` and `created_at`.
 
-## WebSocket endpoint (Phase 4)
+---
+
+## WebSocket endpoint (Phases 4–5)
 
 ```text
 ws://127.0.0.1:8000/ws/clipboard/
 ws://127.0.0.1:8000/ws/clipboard/?device_id=<id>
 ```
 
-The `device_id` query parameter is optional and used for server-side logging
-only. No authentication or authorization is enforced in Phase 4.
+`device_id` in the query string is used for connection-level logging only.
+Each `clipboard.update` message carries its own `device_id`.
 
-### Phase 4 test message
+### `test.message` (Phase 4 — connectivity test)
 
-Clients may send exactly one message type in Phase 4:
+Send:
 
 ```json
-{"type": "test.message", "message": "<non-empty string>"}
+{"type": "test.message", "message": "Hello WebSocket"}
 ```
 
-The server responds with an acknowledgement echoing the message text:
+Receive:
 
 ```json
-{"type": "test.ack", "message": "<echoed string>"}
+{"type": "test.ack", "message": "Hello WebSocket"}
+```
+
+### `clipboard.update` (Phase 5 — clipboard sync)
+
+Send:
+
+```json
+{
+  "type": "clipboard.update",
+  "device_id": "desktop-001",
+  "content": "Hello from Windows"
+}
+```
+
+Both `device_id` and `content` are required non-empty strings.
+
+Receive on success:
+
+```json
+{
+  "type": "clipboard.ack",
+  "device_id": "desktop-001",
+  "status": "stored"
+}
 ```
 
 ### Error responses
 
-The server returns a structured error for invalid input without closing the
-connection:
+The server returns a structured error and **keeps the connection open**:
 
 ```json
 {"type": "error", "code": "<code>", "detail": "<human-readable detail>"}
@@ -60,22 +76,26 @@ connection:
 |-----------|--------|
 | Non-JSON text received | `invalid_json` |
 | JSON value is not an object | `invalid_message` |
-| `type` field is not `test.message` | `unsupported_type` |
-| `message` field missing or not a non-empty string | `invalid_message` |
+| `type` is not a supported value | `unsupported_type` |
+| Missing/non-string `message` (test.message) | `invalid_message` |
+| Missing/non-string/blank `device_id` (clipboard.update) | `invalid_message` |
+| Empty or non-string `content` | `invalid_content` |
 
-### Phase 4 limitations
+### Phase 5 limitations
 
-- Only `test.message` / `test.ack` is supported. `clipboard.update` and all
-  other types return `unsupported_type`.
-- No clipboard data is read, stored, or broadcast over WebSocket.
-- The channel layer is `InMemoryChannelLayer`; it is not shared across
-  processes and resets on server restart.
-- No authentication, device pairing, or reconnection logic exists yet.
+- No broadcasting: `clipboard.update` is stored but not forwarded to other
+  connected clients.
+- `InMemoryChannelLayer` — not shared across processes, resets on restart.
+- No authentication or device authorization.
+- No reconnection logic on the server side.
+- The desktop agent does not queue or retry values missed during an outage.
 
-## Planned event shape (Phase 5+)
+---
 
-Later WebSocket clipboard events will use a structured JSON message, rather
-than arbitrary payloads. A representative later-phase message is:
+## Planned event shape (Phase 6+)
+
+Later phases will add `event_id` and `source_device` fields for idempotency
+and event-loop prevention:
 
 ```json
 {
@@ -86,13 +106,9 @@ than arbitrary payloads. A representative later-phase message is:
 }
 ```
 
-## Rules
+Rules:
 
 - `content` is plain text only.
 - `event_id` is unique for every clipboard event.
-- `source_device` identifies the device that originated the user action.
-- Receivers use the event and source identity to prevent event loops and ignore
-  duplicates.
-- Endpoint paths, acknowledgement behavior, validation rules, and
-  authentication details will be documented when their corresponding phases are
-  implemented and tested.
+- `source_device` identifies the originating device.
+- Receivers use event and source identity to prevent loops and ignore duplicates.

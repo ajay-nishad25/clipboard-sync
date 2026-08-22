@@ -9,73 +9,66 @@ one user's devices, not a production service.
 ## Planned components
 
 ```text
-Desktop Agent (Python)  ── HTTP / WebSocket ──┐
-                                              │
-                                      Django Backend
-                                      - REST API
-                                      - Channels/WebSocket
-                                      - SQLite (initially)
-                                              │
-Android App (Java)     ── HTTP / WebSocket ──┘
+Desktop Agent (Python)  ── WebSocket ──┐
+                                       │
+                               Django Backend
+                               - REST API
+                               - Channels/WebSocket
+                               - SQLite
+                                       │
+Android App (Java)     ── WebSocket ──┘
 ```
 
-- The desktop agent will run on Windows first and be designed with Linux in
-  mind.
-- The backend will begin with SQLite. Redis is not part of Phase 0 and will be
-  added only if Django Channels implementation actually requires it.
-- The Android app will initially receive and display messages before it writes
-  to the system clipboard.
-
-## Current implementation
-
-Phase 1 implements a local desktop detector. It polls the operating-system
-clipboard through `pyperclip`, logs each new non-empty text value once, and
-handles clipboard read failures without exiting.
-
-Phase 2 adds a local Django REST API with a SQLite database. Phase 3 connects
-the desktop agent to its existing `POST /api/clipboard/` endpoint using JSON
-and the development device ID `desktop-001`.
-
-Phase 4 adds Django Channels and WebSocket infrastructure to the backend. The
-server now runs under Daphne, which handles both HTTP and WebSocket connections.
-A `ClipboardConsumer` accepts WebSocket connections, validates a Phase 4
-test-only `test.message` round-trip, and returns structured errors for invalid
-input. The desktop agent remains HTTP-only.
+## Current implementation (Phase 5)
 
 ```text
-                    Django Backend (Daphne)
-                            │
-             ┌──────────────┴──────────────┐
-             │                             │
-             ▼                             ▼
-       REST API                      WebSocket
-  POST /api/clipboard/          ws/clipboard/
-  GET  /api/clipboard/latest/   ClipboardConsumer
-             │                             │
-             ▼                             ▼
-  SQLite ClipboardEntry           In-memory channel layer
-                                  (Phase 4: test messages only)
+Windows Clipboard
+      │  (poll every 0.5 s via pyperclip)
+      ▼
+ClipboardMonitor
+      │  (new text only; duplicates dropped)
+      ▼
+ClipboardWebSocketClient.send(content)
+      │  websockets.sync.client  (persistent connection)
+      │  ws://127.0.0.1:8000/ws/clipboard/?device_id=desktop-001
+      ▼
+Django Backend (Daphne — HTTP + WebSocket on same port)
+      │
+      ├─── HTTP ──► REST API
+      │             POST /api/clipboard/    → ClipboardEntry + 201
+      │             GET  /api/clipboard/latest/ → latest entry
+      │
+      └─── WS ───► ClipboardConsumer
+                   clipboard.update  → validate → ClipboardEntry.objects.create → clipboard.ack
+                   test.message      → test.ack
 ```
 
-The desktop agent uses `requests` with a five-second default timeout. It logs
-network, timeout, HTTP-status, and unexpected-response failures, then keeps
-monitoring. It does not queue or retry failed values.
+The desktop agent maintains one persistent WebSocket connection. On connection
+loss it reconnects with bounded exponential backoff (2 s → 5 s → 15 s → 30 s).
+Clipboard values that arrive during an outage are not queued.
+
+The REST API is kept intact for regression testing and future use. The desktop
+agent no longer drives HTTP for clipboard sync; only WebSocket is used.
 
 ## Identity and authentication roadmap
 
-Phase 0 has no authentication implementation. Early development will identify
-devices with development IDs/tokens. The planned order is development token,
-user/device authentication, Google OAuth, then device pairing.
+Phase 0 has no authentication. Early development uses development IDs/tokens.
+Planned order: development token → user/device authentication → Google OAuth →
+device pairing.
 
 ## Data boundary
 
 Only plain text clipboard data is in scope. Images, files, rich text,
-screenshots, passwords, and arbitrary binary clipboard data are excluded until
-the text workflow is reliable.
+screenshots, passwords, and arbitrary binary clipboard data are excluded.
 
 ## Event-loop prevention (planned)
 
 Each synchronization event will have a unique event ID and source device ID.
 When a client applies a received event to its clipboard, it must recognize that
-change as synchronization-generated and not send the same event back to the
-server.
+change as synchronization-generated and not send it back.
+
+## Channel layer
+
+Phase 5 uses `InMemoryChannelLayer`. It is not shared across processes and
+resets on server restart. Redis will be introduced only if a concrete
+multi-process deployment need requires it.

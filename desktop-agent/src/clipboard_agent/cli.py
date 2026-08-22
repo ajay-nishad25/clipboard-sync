@@ -7,9 +7,9 @@ import logging
 
 import pyperclip
 
-from clipboard_agent.backend_client import ClipboardBackendClient
 from clipboard_agent.config import load_config
 from clipboard_agent.monitor import ClipboardMonitor
+from clipboard_agent.ws_client import ClipboardWebSocketClient
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -55,15 +55,17 @@ def main() -> None:
         logger.error("Invalid desktop-agent configuration: %s", error)
         return
 
-    backend_client = ClipboardBackendClient(
-        api_url=config.api_url,
+    ws_client = ClipboardWebSocketClient(
+        ws_url=config.ws_url,
         device_id=config.device_id,
-        timeout_seconds=config.timeout_seconds,
         logger=logger,
     )
-    ClipboardMonitor(
-        read_clipboard=read_clipboard_text,
-        logger=logger,
-        interval_seconds=arguments.interval,
-        on_text_change=backend_client.send,
-    ).run_forever()
+    try:
+        ClipboardMonitor(
+            read_clipboard=read_clipboard_text,
+            logger=logger,
+            interval_seconds=arguments.interval,
+            on_text_change=ws_client.send,
+        ).run_forever()
+    finally:
+        ws_client.close()

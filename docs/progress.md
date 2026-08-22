@@ -5,57 +5,64 @@
 - [x] Phase 2 — Django Backend
 - [x] Phase 3 — Desktop Agent to Backend
 - [x] Phase 4 — WebSocket Infrastructure
-- [ ] Phase 5 — Desktop Real-Time Sync
+- [x] Phase 5 — Desktop Real-Time WebSocket Sync
 - [ ] Phase 6 — Android Application
 - [ ] Phase 7 — Android Clipboard Integration
 
 ## Phase 0 outcome
 
 Created the monorepo directory layout, project instructions, baseline
-documentation, and repository ignore rules. No application code or clipboard
-synchronization behavior exists yet.
+documentation, and repository ignore rules.
 
 ## Phase 1 outcome
 
 Implemented and tested a local Python text clipboard detector in
-`desktop-agent/`. It logs each distinct non-empty text value once, safely
-handles empty content and clipboard read failures, and has no network or sync
-behavior.
+`desktop-agent/`. Logs each distinct non-empty text value once; safely handles
+empty content and clipboard read failures.
 
 ## Phase 2 outcome
 
-Implemented and verified the Django REST backend in `backend/`. It uses SQLite
-and exposes development endpoints to create `ClipboardEntry` records and return
-the newest entry. There is no client integration, WebSocket, authentication, or
-real-time synchronization.
+Implemented and verified the Django REST backend in `backend/`. SQLite,
+`ClipboardEntry` model, `POST /api/clipboard/`, `GET /api/clipboard/latest/`.
 
 ## Phase 3 outcome
 
-Connected the desktop agent to the Django create-entry API through HTTP. Each
-distinct non-empty text clipboard value is sent as JSON with development device
-ID `desktop-001`. Network and backend failures are logged without stopping the
-agent; failed values are not retried or queued.
+Connected the desktop agent to the Django REST API via HTTP. Each distinct
+non-empty clipboard value is sent as JSON. Network and backend failures are
+logged without stopping the agent.
 
 ## Phase 4 outcome
 
-Added Django Channels WebSocket infrastructure to the backend. The server now
-runs under Daphne, which handles both HTTP and WebSocket connections on the same
-port. Key additions:
+Added Django Channels WebSocket infrastructure. Daphne serves HTTP and
+WebSocket on the same port. `ClipboardConsumer` handles `test.message` /
+`test.ack`. `InMemoryChannelLayer` is used; no Redis.
 
-- `clipboard/consumers.py` — `ClipboardConsumer` accepts connections, validates
-  `test.message` payloads, returns `test.ack` responses, and returns structured
-  errors for invalid input.
-- `clipboard/routing.py` — maps `ws/clipboard/` to `ClipboardConsumer`.
-- `config/asgi.py` — `ProtocolTypeRouter` routes HTTP to Django and WebSocket
-  to `ClipboardConsumer`.
-- `config/settings.py` — `daphne` and `channels` added to `INSTALLED_APPS`,
-  `ASGI_APPLICATION` and `InMemoryChannelLayer` enabled.
-- `clipboard/tests_websocket.py` — 5 automated tests covering connect,
-  disconnect, valid message, malformed JSON, unsupported type, and missing
-  field.
-- `scripts/websocket_smoke_test.py` — development-only script for manual
-  end-to-end validation.
+## Phase 5 outcome
 
-All 5 existing REST tests continue to pass. The desktop agent remains HTTP-only
-and its 17 unit tests are unaffected. No real clipboard synchronization,
-authentication, Redis, or broadcast logic was added.
+Connected the desktop agent to the backend over WebSocket using the `websockets`
+sync client. Key additions:
+
+- `desktop-agent/src/clipboard_agent/ws_client.py` — `ClipboardWebSocketClient`
+  with persistent connection, `clipboard.update` payload, bounded-backoff
+  reconnection (2 s → 5 s → 15 s → 30 s, non-blocking), and graceful error
+  handling.
+- `desktop-agent/src/clipboard_agent/config.py` — added `ws_url` / `CLIPBOARD_WS_URL`.
+- `desktop-agent/src/clipboard_agent/cli.py` — monitoring loop now uses
+  `ClipboardWebSocketClient` as its transport; `ClipboardBackendClient` retained
+  for regression tests but not wired into the live sync path.
+- `backend/clipboard/consumers.py` — added `clipboard.update` handler:
+  validates `device_id` and `content`, stores `ClipboardEntry` via
+  `database_sync_to_async`, returns `clipboard.ack`.
+- `backend/clipboard/tests_websocket.py` — 5 new `clipboard.update` tests.
+- `desktop-agent/tests/test_ws_client.py` — 20 new WS client tests.
+- `desktop-agent/tests/test_config.py` — extended with `ws_url` tests.
+
+Verification results:
+- Backend: 15/15 tests passing (5 REST + 5 WS infra + 5 clipboard.update).
+- Desktop agent: 37/37 tests passing (17 existing + 20 new WS client tests).
+- No Redis, no authentication, no broadcasting, no Android changes, no Git
+  commits without explicit permission.
+
+Limitations: clipboard values missed during WebSocket outages are not queued;
+`InMemoryChannelLayer` does not persist across server restarts; no event_id or
+source_device loop prevention yet.
