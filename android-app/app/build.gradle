@@ -1,0 +1,42 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.clipboard.sync'
+    compileSdk 37
+    // Explicitly use the installed build-tools version.
+    // If AGP selects a different default, this ensures the installed 36.0.0 is used.
+    buildToolsVersion '36.0.0'
+
+    defaultConfig {
+        applicationId 'com.clipboard.sync'
+        minSdk 26
+        targetSdk 37
+        versionCode 1
+        versionName '0.1.0'
+    }
+
+    compileOptions {
+        // AGP 9 and Gradle 9 both require Java 17+; JDK 20 in the environment satisfies this.
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+dependencies {
+    // WebSocket client with built-in Java WebSocket API.
+    implementation 'com.squareup.okhttp3:okhttp:5.5.0'
+
+    // UI and Material components.
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.2.1'
+}

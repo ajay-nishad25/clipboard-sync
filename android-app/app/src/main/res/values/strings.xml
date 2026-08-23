@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Clipboard Sync</string>
+
+    <!-- Status text shown in the UI -->
+    <string name="status_stopped">Service not running.</string>
+    <string name="status_starting">Starting service\u2026</string>
+    <string name="status_connected">Connected — monitoring clipboard.</string>
+    <string name="status_reconnecting">Disconnected — reconnecting\u2026</string>
+    <string name="status_synced">Synced %1$d item(s).</string>
+    <string name="status_server_error">Server error: %1$s</string>
+    <string name="status_not_connected">Not connected — clipboard value dropped.</string>
+
+    <!-- Labels -->
+    <string name="label_status">Status</string>
+    <string name="label_recent_events">Recent events</string>
+
+    <!-- Buttons -->
+    <string name="btn_start">Start</string>
+    <string name="btn_stop">Stop</string>
+
+    <!-- Notification strings -->
+    <string name="notif_channel_description">Shows clipboard sync service status.</string>
+    <string name="notif_starting">Starting\u2026</string>
+    <string name="notif_connected">Connected — monitoring clipboard.</string>
+    <string name="notif_reconnecting">Disconnected — reconnecting\u2026</string>
+</resources>

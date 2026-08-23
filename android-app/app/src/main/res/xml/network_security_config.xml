@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Development network security config.
+    Allows plain ws:// traffic to known development hosts.
+
+    IMPORTANT: For production, use wss:// and REMOVE this file and the
+    android:networkSecurityConfig attribute in AndroidManifest.xml.
+
+    Physical device: add your host machine's local IP address as a <domain>.
+    Run 'ipconfig' on Windows to find it (usually 192.168.x.x).
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Android Emulator: host machine loopback alias. -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <!-- Physical device loopback for adb reverse tcp:8000 tcp:8000 -->
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <!-- Physical device on the same network: replace with your machine's local IP. -->
+        <domain includeSubdomains="false">192.168.1.100</domain>
+    </domain-config>
+</network-security-config>
