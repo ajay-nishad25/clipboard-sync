@@ -1,146 +1,81 @@
 # Android Clipboard Sync App
 
-Phase 6 Java Android application that monitors the Android clipboard and
-forwards each new text value to the Django backend using the Phase 5
-`clipboard.update` WebSocket protocol.
+Phase 6 Java Android application that implements **Manual Android Clipboard Synchronization**
+compatible with Android 10+ / Android 14 restrictions.
 
-## Data flow
+## Architecture
 
 ```text
-Android Clipboard
-       ↓  (ClipboardManager.OnPrimaryClipChangedListener)
-ClipboardMonitorService (Foreground Service)
-       ↓  (OkHttp WebSocket — clipboard.update)
-Django Backend — ws://10.0.2.2:8000/ws/clipboard/
-       ↓
-ClipboardEntry / SQLite
-       ↓  (clipboard.ack)
-Android (logged in Logcat)
+                                 ANDROID APP
+                                      │
+           ┌──────────────────────────┴──────────────────────────┐
+           │                                                     │
+           ▼                                                     ▼
+    [SEND CLIPBOARD]                                     [RECEIVE CLIPBOARD]
+           │                                                     │
+           ▼                                                     ▼
+ cm.getPrimaryClip()                                GET /api/clipboard/latest/
+ (MainActivity Focused)                                          │
+           │                                                     ▼
+           ▼                                            HTTP JSON Response
+ClipboardWebSocketClient                                         │
+ (ws://127.0.0.1:8000)                                           ▼
+           │                                            cm.setPrimaryClip()
+           ▼ (clipboard.update)                                  │
+    Django Backend                                               ▼
+           │                                             Android Clipboard
+           ▼ (clipboard.ack)
+ "Clipboard sent successfully"
 ```
 
-## Prerequisites
-
-- Android Studio (any recent version)
-- Android device or emulator running API 26 (Android 8.0) or higher
-- Django backend running (see `backend/README.md`)
-
-## Build requirements
-
-| Component | Version |
-|-----------|---------|
-| Android Gradle Plugin | 9.0.0 |
-| Gradle wrapper | 9.1.0 (downloaded automatically) |
-| compileSdk / targetSdk | 37 (Android 17) |
-| minSdk | 26 (Android 8.0) |
-| Build tools | 36.0.0 |
-| Java source / target | 17 |
-
-## Build
+## Build & Test
 
 ```powershell
 cd android-app
+# Run unit tests
+.\gradlew.bat test
+
+# Build debug APK
 .\gradlew.bat assembleDebug
 ```
 
-The APK is placed at: `app/build/outputs/apk/debug/app-debug.apk`
+The APK is placed at: `app/build.gradle` → `app/build/outputs/apk/debug/app-debug.apk`
 
-## Install on a device
+## Physical Device Setup (USB Debugging)
 
-```powershell
-# Install (device must be connected via USB or emulator must be running)
-.\gradlew.bat installDebug
-```
-
-## Android Emulator (AVD) setup
-
-The backend runs on your Windows machine. The Android emulator cannot reach
-`127.0.0.1`; it uses `10.0.2.2` instead.
-
-The app is pre-configured to connect to `ws://10.0.2.2:8000/ws/clipboard/`.
-No changes are needed for the emulator.
-
-**Start the emulator, then start the Django server, then tap Start in the app.**
-
-## Physical device setup
-
-**Option A — same WiFi network**
-
-1. Find your Windows machine's local IP address: `ipconfig` (look for IPv4 address, e.g. `192.168.1.50`).
-2. Edit `Config.java` and change `WS_BASE_URL` to your machine's IP:
-   ```java
-   public static final String WS_BASE_URL = "ws://192.168.1.50:8000/ws/clipboard/";
+1. Connect your physical Android device (e.g. Realme Android 14) via USB with USB Debugging enabled.
+2. Enable port forwarding:
+   ```powershell
+   adb reverse tcp:8000 tcp:8000
    ```
-3. Also add your IP to `res/xml/network_security_config.xml`:
-   ```xml
-   <domain includeSubdomains="false">192.168.1.50</domain>
+3. Install the debug APK:
+   ```powershell
+   .\gradlew.bat installDebug
    ```
-4. Rebuild: `.\gradlew.bat assembleDebug`
 
-**Option B — USB debugging with port forwarding**
+## User Workflows
 
-```powershell
-adb reverse tcp:8000 tcp:8000
-```
+### 1. SEND CLIPBOARD
+1. Open **Clipboard Sync** app on Android → tap **START** to establish WebSocket connection.
+2. Copy any text in Chrome, WhatsApp, Notes, etc.
+3. Return to **Clipboard Sync** app.
+4. Tap **`SEND CLIPBOARD`**.
+5. `MainActivity` reads the clipboard while focused, dispatches text over WebSocket (`clipboard.update`), waits for `clipboard.ack` from Django, and displays:
+   `"Clipboard sent successfully"`
 
-Then change `WS_BASE_URL` to `ws://127.0.0.1:8000/ws/clipboard/`.
+### 2. RECEIVE CLIPBOARD
+1. Ensure desktop agent has sent text to Django (or an entry exists in backend DB).
+2. Open **Clipboard Sync** app on Android.
+3. Tap **`RECEIVE CLIPBOARD`**.
+4. Android fetches the latest entry via `GET http://127.0.0.1:8000/api/clipboard/latest/`, writes it to Android clipboard using `setPrimaryClip()`, and displays:
+   `"Clipboard received successfully"`
+5. Paste into any Android application.
 
 ## Permissions
 
 | Permission | Purpose |
 |---|---|
-| `INTERNET` | WebSocket connection to Django backend |
-| `FOREGROUND_SERVICE` | Start the clipboard monitor as a foreground service |
-| `FOREGROUND_SERVICE_DATA_SYNC` | API 34+: foreground service type for data transfer |
-| `POST_NOTIFICATIONS` | API 33+: show the foreground service notification |
-
-The app requests `POST_NOTIFICATIONS` at runtime on API 33+. Notification
-permission is required for the foreground service to run on Android 13+.
-
-## Android clipboard access restriction
-
-On Android 10 and above, apps cannot read clipboard data unless they hold the
-focused window. This affects clipboard sync when the app is in the background.
-
-| Scenario | Result |
-|---|---|
-| App open and visible | Clipboard sync works reliably |
-| App in background (API < 29) | Clipboard sync works reliably |
-| App in background (API 29+) | Clipboard read returns null; value is dropped |
-
-**For reliable testing:** keep the app visible on screen, or use an emulator
-running API 26–28 for full background sync.
-
-## Manual integration test
-
-1. Start the Django backend:
-   ```powershell
-   cd backend
-   .\.venv\Scripts\Activate.ps1
-   python manage.py runserver
-   ```
-2. Start the Android emulator and install the app.
-3. Open the app → tap **Start**.
-4. Confirm the status shows "Connected — monitoring clipboard."
-5. Copy any text on the emulator (long-press in a text field → Copy).
-6. Observe the status update in the app and the `clipboard.ack` in Logcat.
-7. Verify the entry was stored:
-   ```powershell
-   Invoke-RestMethod -Uri http://127.0.0.1:8000/api/clipboard/latest/
-   ```
-   The response should contain the copied text and `device_id: "android-001"`.
-
-## Failure/recovery test
-
-1. Start the app (service running, WebSocket connected).
-2. Stop Django. Confirm the app shows "Disconnected — reconnecting…"
-3. Restart Django. Confirm the app automatically reconnects (2 → 5 → 15 → 30 s backoff).
-4. Copy text. Confirm sync after reconnect.
-
-## Known limitations (Phase 6)
-
-- No server-side broadcasting: clipboard values sent from Android are stored
-  but not forwarded to the desktop agent.
-- Clipboard sync from background may fail on Android 10+ (see above).
-- No authentication or device authorization.
-- WebSocket URL and device ID are hardcoded constants in `Config.java`.
-- No emulator/physical device auto-detection.
+| `INTERNET` | WebSocket connection & REST HTTP requests to Django backend |
+| `FOREGROUND_SERVICE` | Maintain background WebSocket connection |
+| `FOREGROUND_SERVICE_DATA_SYNC` | API 34+: foreground service type for data sync |
+| `POST_NOTIFICATIONS` | API 33+: show service notification |

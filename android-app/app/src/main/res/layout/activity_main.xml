@@ -17,11 +17,20 @@
         android:paddingBottom="4dp" />
 
     <TextView
+        android:id="@+id/instructionsText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/label_instructions"
+        android:textAppearance="?attr/textAppearanceCaption"
+        android:textColor="?android:attr/textColorSecondary"
+        android:paddingTop="4dp"
+        android:paddingBottom="12dp" />
+
+    <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/label_status"
-        android:textAppearance="?attr/textAppearanceSubtitle2"
-        android:paddingTop="16dp" />
+        android:textAppearance="?attr/textAppearanceSubtitle2" />
 
     <TextView
         android:id="@+id/statusText"
@@ -29,14 +38,36 @@
         android:layout_height="wrap_content"
         android:text="@string/status_stopped"
         android:textAppearance="?attr/textAppearanceBody1"
-        android:paddingBottom="8dp" />
+        android:paddingBottom="12dp" />
+
+    <Button
+        android:id="@+id/sendButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/btn_send_clipboard"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/receiveButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/btn_receive_clipboard"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/toggleButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/btn_start"
+        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+        android:layout_marginBottom="12dp" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/label_recent_events"
         android:textAppearance="?attr/textAppearanceSubtitle2"
-        android:paddingTop="12dp" />
+        android:paddingTop="4dp" />
 
     <ScrollView
         android:layout_width="match_parent"
@@ -53,12 +84,5 @@
             android:textAppearance="?attr/textAppearanceBody2" />
 
     </ScrollView>
-
-    <Button
-        android:id="@+id/toggleButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="@string/btn_start" />
 
 </LinearLayout>

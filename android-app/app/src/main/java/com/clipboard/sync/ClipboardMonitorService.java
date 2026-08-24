@@ -5,8 +5,6 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
@@ -49,9 +47,13 @@ public class ClipboardMonitorService extends Service {
     public static final String EXTRA_STATUS_MESSAGE = "status_message";
     public static final String EXTRA_LAST_CONTENT  = "last_content";
     public static final String EXTRA_SYNC_COUNT    = "sync_count";
+    public static final String EXTRA_IS_ACK        = "is_ack";
+    public static final String EXTRA_IS_SUCCESS    = "is_success";
 
-    private ClipboardManager clipboardManager;
-    private ClipboardManager.OnPrimaryClipChangedListener clipboardListener;
+    /** Command action for MainActivity to trigger text sync. */
+    public static final String ACTION_SEND_CLIPBOARD = "com.clipboard.sync.SEND_CLIPBOARD";
+    public static final String EXTRA_CLIPBOARD_TEXT = "clipboard_text";
+
     private ClipboardWebSocketClient wsClient;
 
     private String lastSentContent = null;
@@ -67,15 +69,19 @@ public class ClipboardMonitorService extends Service {
         createNotificationChannel();
         startForegroundWithType(buildNotification(getString(R.string.notif_starting)));
         initWebSocket();
-        initClipboardMonitor();
         Log.i(TAG, "ClipboardMonitorService started.");
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && ACTION_SEND_CLIPBOARD.equals(intent.getAction())) {
+            String text = intent.getStringExtra(EXTRA_CLIPBOARD_TEXT);
+            if (text != null && !text.isEmpty()) {
+                sendClipboardText(text);
+            }
+        }
         // START_STICKY: if the process is killed, Android restarts the service
-        // (without an intent), which re-establishes the clipboard listener and
-        // WebSocket connection.
+        // and re-establishes the WebSocket connection.
         return START_STICKY;
     }
 
@@ -87,9 +93,6 @@ public class ClipboardMonitorService extends Service {
 
     @Override
     public void onDestroy() {
-        if (clipboardManager != null && clipboardListener != null) {
-            clipboardManager.removePrimaryClipChangedListener(clipboardListener);
-        }
         if (wsClient != null) {
             wsClient.close();
         }
@@ -110,13 +113,13 @@ public class ClipboardMonitorService extends Service {
                     @Override
                     public void onConnected() {
                         updateNotification(getString(R.string.notif_connected));
-                        broadcastStatus(getString(R.string.status_connected), null);
+                        broadcastStatus(getString(R.string.status_connected), null, false, false);
                     }
 
                     @Override
                     public void onDisconnected() {
                         updateNotification(getString(R.string.notif_reconnecting));
-                        broadcastStatus(getString(R.string.status_reconnecting), null);
+                        broadcastStatus(getString(R.string.status_reconnecting), null, false, false);
                     }
 
                     @Override
@@ -125,86 +128,44 @@ public class ClipboardMonitorService extends Service {
                         Log.i(TAG, "Ack from server: device=" + deviceId
                                 + " status=" + status + " total=" + syncCount);
                         broadcastStatus(
-                                getString(R.string.status_synced, syncCount),
-                                lastSentContent
+                                getString(R.string.status_sent_success),
+                                lastSentContent,
+                                true,
+                                true
                         );
                     }
 
                     @Override
                     public void onError(String code, String detail) {
                         Log.w(TAG, "Server error: " + code + " — " + detail);
-                        broadcastStatus(getString(R.string.status_server_error, code), null);
+                        broadcastStatus(getString(R.string.status_send_failed), null, true, false);
                     }
                 });
         wsClient.connect();
     }
 
-    // ------------------------------------------------------------------
-    // Clipboard monitoring
-    // ------------------------------------------------------------------
-
-    private void initClipboardMonitor() {
-        clipboardManager = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-        if (clipboardManager == null) {
-            Log.e(TAG, "ClipboardManager is unavailable on this device.");
-            return;
-        }
-        clipboardListener = this::onClipboardChanged;
-        clipboardManager.addPrimaryClipChangedListener(clipboardListener);
-        Log.i(TAG, "Clipboard listener registered.");
-    }
-
     /**
-     * Called by the OS whenever the primary clipboard changes.
+     * Send clipboard text to the Django WebSocket server.
      *
-     * On Android 10+ (API 29+), getPrimaryClip() returns null when the app
-     * does not hold the focused window. The failure is logged and the value
-     * is silently dropped; monitoring continues for the next change.
+     * @param content Plain text clipboard string.
      */
-    private void onClipboardChanged() {
-        if (clipboardManager == null) return;
-
-        ClipData clip;
-        try {
-            clip = clipboardManager.getPrimaryClip();
-        } catch (SecurityException e) {
-            // Thrown on some Android 12+ builds when the app is strictly
-            // in the background without a focused window.
-            Log.w(TAG, "Clipboard read denied by the OS (API 29+ background restriction).");
+    public void sendClipboardText(String content) {
+        if (content == null || content.isEmpty()) {
             return;
         }
 
-        if (clip == null || clip.getItemCount() == 0) {
-            Log.d(TAG, "Clipboard is empty or inaccessible from the background.");
-            return;
-        }
-
-        CharSequence raw = clip.getItemAt(0).getText();
-        if (raw == null) {
-            Log.d(TAG, "Clipboard text is null — likely restricted on this Android version.");
-            return;
-        }
-
-        String content = raw.toString();
-        if (content.isEmpty()) {
-            Log.d(TAG, "Clipboard text is empty; ignoring.");
-            return;
-        }
-
-        // Duplicate prevention: skip if this value was already sent.
-        if (content.equals(lastSentContent)) {
-            Log.d(TAG, "Duplicate clipboard value; skipping.");
-            return;
-        }
-
-        Log.i(TAG, "New clipboard value (" + content.length() + " chars); sending.");
+        Log.i(TAG, "Sending clipboard value (" + content.length() + " chars).");
         lastSentContent = content;
 
         if (wsClient != null && wsClient.isConnected()) {
-            wsClient.send(content);
+            boolean enqueued = wsClient.send(content);
+            if (!enqueued) {
+                Log.w(TAG, "WebSocket send buffer full — send failed.");
+                broadcastStatus(getString(R.string.status_send_failed), null, true, false);
+            }
         } else {
             Log.w(TAG, "WebSocket not connected — clipboard value dropped.");
-            broadcastStatus(getString(R.string.status_not_connected), null);
+            broadcastStatus(getString(R.string.status_send_failed), null, true, false);
         }
     }
 
@@ -242,11 +203,13 @@ public class ClipboardMonitorService extends Service {
     }
 
     private Notification buildNotification(String contentText) {
+        Intent openIntent = new Intent(this, MainActivity.class);
         PendingIntent pi = PendingIntent.getActivity(
                 this, 0,
-                new Intent(this, MainActivity.class),
+                openIntent,
                 PendingIntent.FLAG_IMMUTABLE
         );
+
         return new NotificationCompat.Builder(this, Config.NOTIFICATION_CHANNEL_ID)
                 .setContentTitle(getString(R.string.app_name))
                 .setContentText(contentText)
@@ -264,13 +227,18 @@ public class ClipboardMonitorService extends Service {
     /**
      * Broadcast a status update so MainActivity can refresh the UI.
      *
-     * @param message  Human-readable status string.
-     * @param content  The clipboard content just synced, or null.
+     * @param message    Human-readable status string.
+     * @param content    The clipboard content just synced, or null.
+     * @param isAck      True if this broadcast is in response to a send request.
+     * @param isSuccess  True if the send operation succeeded.
      */
-    private void broadcastStatus(String message, @Nullable String content) {
+    private void broadcastStatus(String message, @Nullable String content, boolean isAck, boolean isSuccess) {
         Intent intent = new Intent(ACTION_STATUS_UPDATE);
+        intent.setPackage(getPackageName());
         intent.putExtra(EXTRA_STATUS_MESSAGE, message);
         intent.putExtra(EXTRA_SYNC_COUNT, syncCount);
+        intent.putExtra(EXTRA_IS_ACK, isAck);
+        intent.putExtra(EXTRA_IS_SUCCESS, isSuccess);
         if (content != null) intent.putExtra(EXTRA_LAST_CONTENT, content);
         sendBroadcast(intent);
     }

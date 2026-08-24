@@ -22,6 +22,9 @@ public final class Config {
      */
     public static final String WS_BASE_URL = "ws://127.0.0.1:8000/ws/clipboard/";
 
+    /** REST API endpoint to retrieve the most recent clipboard entry. */
+    public static final String REST_LATEST_URL = "http://127.0.0.1:8000/api/clipboard/latest/";
+
     /** Development device identifier sent with every clipboard.update message. */
     public static final String DEVICE_ID = "android-001";
 
