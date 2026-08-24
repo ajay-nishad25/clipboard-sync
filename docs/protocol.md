@@ -64,6 +64,22 @@ Receive on success:
 }
 ```
 
+### `clipboard.remote_update` (Phase 7 — server-to-client broadcast)
+
+When Django receives a valid `clipboard.update` from any connected device, it broadcasts `clipboard.remote_update` to all **other** connected WebSocket devices in the `clipboard_sync_group`:
+
+Server → Client Receive:
+
+```json
+{
+  "type": "clipboard.remote_update",
+  "device_id": "android-001",
+  "content": "Hello from Android"
+}
+```
+
+The sender of `clipboard.update` receives `clipboard.ack` and does **not** receive `clipboard.remote_update`.
+
 ### Error responses
 
 The server returns a structured error and **keeps the connection open**:

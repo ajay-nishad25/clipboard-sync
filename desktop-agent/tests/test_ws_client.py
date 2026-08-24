@@ -12,20 +12,21 @@ from clipboard_agent.monitor import ClipboardMonitor
 from clipboard_agent.ws_client import ClipboardWebSocketClient, _BACKOFF_DELAYS
 
 
-def _make_client(ws_url: str = "ws://127.0.0.1:8000/ws/clipboard/") -> ClipboardWebSocketClient:
+def _make_client(ws_url: str = "ws://127.0.0.1:8000/ws/clipboard/", on_remote_update=None) -> ClipboardWebSocketClient:
     logger = logging.getLogger(f"test.ws_client.{ws_url}")
     logger.propagate = False
     return ClipboardWebSocketClient(
         ws_url=ws_url,
         device_id="desktop-001",
         logger=logger,
+        on_remote_update=on_remote_update,
     )
 
 
 def _ack_connection(content: str = "Hello") -> Mock:
     """Return a mock connection that responds with clipboard.ack."""
     conn = Mock()
-    conn.recv.return_value = json.dumps(
+    conn.recv.side_effect = lambda: json.dumps(
         {"type": "clipboard.ack", "device_id": "desktop-001", "status": "stored"}
     )
     return conn
@@ -34,7 +35,9 @@ def _ack_connection(content: str = "Hello") -> Mock:
 def _error_connection(code: str = "invalid_content", detail: str = "bad") -> Mock:
     """Return a mock connection that responds with an error."""
     conn = Mock()
-    conn.recv.return_value = json.dumps({"type": "error", "code": code, "detail": detail})
+    conn.recv.side_effect = lambda: json.dumps(
+        {"type": "error", "code": code, "detail": detail}
+    )
     return conn
 
 
@@ -50,6 +53,7 @@ class ClipboardWebSocketClientSendTests(unittest.TestCase):
             {"type": "clipboard.update", "device_id": "desktop-001", "content": "Hello"}
         )
         conn.send.assert_called_once_with(expected_payload)
+        client.close()
 
     def test_url_includes_device_id_query_param(self) -> None:
         client = _make_client()
@@ -61,6 +65,7 @@ class ClipboardWebSocketClientSendTests(unittest.TestCase):
         mock_connect.assert_called_once_with(
             "ws://127.0.0.1:8000/ws/clipboard/?device_id=desktop-001"
         )
+        client.close()
 
     def test_ack_response_returns_true(self) -> None:
         client = _make_client()
@@ -70,6 +75,7 @@ class ClipboardWebSocketClientSendTests(unittest.TestCase):
             result = client.send("Hello")
 
         self.assertTrue(result)
+        client.close()
 
     def test_server_error_response_returns_false(self) -> None:
         client = _make_client()
@@ -79,6 +85,7 @@ class ClipboardWebSocketClientSendTests(unittest.TestCase):
             result = client.send("Hello")
 
         self.assertFalse(result)
+        client.close()
 
     def test_reuses_existing_connection_on_second_send(self) -> None:
         client = _make_client()
@@ -90,16 +97,34 @@ class ClipboardWebSocketClientSendTests(unittest.TestCase):
 
         mock_connect.assert_called_once()
         self.assertEqual(conn.send.call_count, 2)
+        client.close()
 
     def test_non_json_server_response_returns_false(self) -> None:
         client = _make_client()
         conn = Mock()
-        conn.recv.return_value = "not-json"
+        conn.recv.side_effect = ["not-json", Exception("closed")]
 
         with patch("clipboard_agent.ws_client.connect", return_value=conn):
             result = client.send("Hello")
 
         self.assertFalse(result)
+        client.close()
+
+    def test_remote_update_invokes_callback(self) -> None:
+        handler = Mock()
+        client = _make_client(on_remote_update=handler)
+        conn = Mock()
+        conn.recv.side_effect = [
+            json.dumps({"type": "clipboard.remote_update", "device_id": "android-001", "content": "Hello from Android"}),
+            Exception("closed"),
+        ]
+
+        with patch("clipboard_agent.ws_client.connect", return_value=conn):
+            self.assertTrue(client._ensure_connected())
+            time.sleep(0.1)
+
+        handler.assert_called_once_with("android-001", "Hello from Android")
+        client.close()
 
 
 class ClipboardWebSocketClientConnectionTests(unittest.TestCase):
@@ -110,6 +135,7 @@ class ClipboardWebSocketClientConnectionTests(unittest.TestCase):
             result = client.send("Hello")
 
         self.assertFalse(result)
+        client.close()
 
     def test_connect_failure_schedules_backoff(self) -> None:
         client = _make_client()
@@ -122,23 +148,25 @@ class ClipboardWebSocketClientConnectionTests(unittest.TestCase):
         self.assertAlmostEqual(
             client._retry_after - before, _BACKOFF_DELAYS[0], delta=0.1
         )
+        client.close()
 
     def test_send_failure_closes_connection_and_schedules_backoff(self) -> None:
         client = _make_client()
         conn = Mock()
         conn.send.side_effect = OSError("broken pipe")
+        conn.recv.side_effect = Exception("closed")
 
         with patch("clipboard_agent.ws_client.connect", return_value=conn):
             result = client.send("Hello")
 
         self.assertFalse(result)
-        conn.close.assert_called_once()
+        conn.close.assert_called()
         self.assertIsNone(client._connection)
         self.assertGreater(client._retry_after, 0.0)
+        client.close()
 
     def test_no_reconnect_attempt_during_backoff_window(self) -> None:
         client = _make_client()
-        # Force backoff to a future time
         client._retry_after = time.monotonic() + 100
 
         with patch("clipboard_agent.ws_client.connect") as mock_connect:
@@ -146,10 +174,10 @@ class ClipboardWebSocketClientConnectionTests(unittest.TestCase):
 
         mock_connect.assert_not_called()
         self.assertFalse(result)
+        client.close()
 
     def test_reconnects_when_backoff_window_expires(self) -> None:
         client = _make_client()
-        # Set backoff to a past time (already expired)
         client._retry_after = time.monotonic() - 1
         conn = _ack_connection()
 
@@ -158,6 +186,7 @@ class ClipboardWebSocketClientConnectionTests(unittest.TestCase):
 
         mock_connect.assert_called_once()
         self.assertTrue(result)
+        client.close()
 
     def test_successful_send_resets_backoff(self) -> None:
         client = _make_client()
@@ -170,15 +199,17 @@ class ClipboardWebSocketClientConnectionTests(unittest.TestCase):
 
         self.assertEqual(client._backoff_index, 0)
         self.assertEqual(client._retry_after, 0.0)
+        client.close()
 
     def test_backoff_index_advances_on_repeated_failures(self) -> None:
         client = _make_client()
 
         for expected_index in range(1, len(_BACKOFF_DELAYS)):
-            client._retry_after = 0.0  # allow retry
+            client._retry_after = 0.0
             with patch("clipboard_agent.ws_client.connect", side_effect=OSError("refused")):
                 client.send("Hello")
             self.assertEqual(client._backoff_index, expected_index)
+        client.close()
 
     def test_backoff_index_caps_at_last_delay(self) -> None:
         client = _make_client()
@@ -189,6 +220,7 @@ class ClipboardWebSocketClientConnectionTests(unittest.TestCase):
             client.send("Hello")
 
         self.assertEqual(client._backoff_index, len(_BACKOFF_DELAYS) - 1)
+        client.close()
 
     def test_close_releases_connection(self) -> None:
         client = _make_client()
@@ -199,12 +231,12 @@ class ClipboardWebSocketClientConnectionTests(unittest.TestCase):
 
         client.close()
 
-        conn.close.assert_called_once()
+        conn.close.assert_called()
         self.assertIsNone(client._connection)
 
     def test_close_when_not_connected_is_safe(self) -> None:
         client = _make_client()
-        client.close()  # must not raise
+        client.close()
 
 
 class ClipboardWebSocketClientMonitorIntegrationTests(unittest.TestCase):
@@ -224,19 +256,19 @@ class ClipboardWebSocketClientMonitorIntegrationTests(unittest.TestCase):
         client = _make_client()
         conn = Mock()
         conn.send.side_effect = [OSError("broken"), None]
-        conn.recv.return_value = json.dumps(
+        conn.recv.side_effect = lambda: json.dumps(
             {"type": "clipboard.ack", "device_id": "desktop-001", "status": "stored"}
         )
         monitor = self._make_monitor(client, ["First", "Second"])
 
         with patch("clipboard_agent.ws_client.connect", return_value=conn):
             monitor.poll_once()  # First → send fails
-            # Reset backoff so second send is allowed
             client._retry_after = 0.0
-            client._connection = conn  # reconnect manually for test
+            client._connection = conn
             monitor.poll_once()  # Second → send succeeds
 
         self.assertEqual(conn.send.call_count, 2)
+        client.close()
 
     def test_duplicate_clipboard_values_not_resent(self) -> None:
         client = _make_client()
@@ -252,3 +284,4 @@ class ClipboardWebSocketClientMonitorIntegrationTests(unittest.TestCase):
         payloads = [json.loads(c.args[0]) for c in conn.send.call_args_list]
         self.assertEqual(payloads[0]["content"], "Hello")
         self.assertEqual(payloads[1]["content"], "World")
+        client.close()

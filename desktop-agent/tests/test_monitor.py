@@ -101,3 +101,16 @@ class ClipboardMonitorTests(unittest.TestCase):
             monitor.poll_once()
 
         self.assertEqual(handler.call_count, 2)
+
+    def test_set_last_content_suppresses_outbound_event(self) -> None:
+        handler = unittest.mock.Mock()
+        monitor = ClipboardMonitor(
+            read_clipboard=lambda: "Remote Content",
+            logger=self.logger,
+            on_text_change=handler,
+        )
+
+        monitor.set_last_content("Remote Content")
+        monitor.poll_once()
+
+        handler.assert_not_called()

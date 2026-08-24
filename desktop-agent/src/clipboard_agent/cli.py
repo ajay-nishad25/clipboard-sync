@@ -55,17 +55,28 @@ def main() -> None:
         logger.error("Invalid desktop-agent configuration: %s", error)
         return
 
+    monitor: ClipboardMonitor | None = None
+
+    def handle_remote_update(device_id: str, content: str) -> None:
+        if monitor is not None:
+            pyperclip.copy(content)
+            monitor.set_last_content(content)
+            logger.info("Updated Windows system clipboard from remote device %s.", device_id)
+
     ws_client = ClipboardWebSocketClient(
         ws_url=config.ws_url,
         device_id=config.device_id,
         logger=logger,
+        on_remote_update=handle_remote_update,
     )
+    monitor = ClipboardMonitor(
+        read_clipboard=read_clipboard_text,
+        logger=logger,
+        interval_seconds=arguments.interval,
+        on_text_change=ws_client.send,
+    )
+
     try:
-        ClipboardMonitor(
-            read_clipboard=read_clipboard_text,
-            logger=logger,
-            interval_seconds=arguments.interval,
-            on_text_change=ws_client.send,
-        ).run_forever()
+        monitor.run_forever()
     finally:
         ws_client.close()

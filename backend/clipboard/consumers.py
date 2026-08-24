@@ -14,20 +14,26 @@ from clipboard.models import ClipboardEntry
 logger = logging.getLogger(__name__)
 
 
+GROUP_NAME = "clipboard_sync_group"
+
+
 class ClipboardConsumer(AsyncWebsocketConsumer):
     """Handle WebSocket connections for clipboard synchronization.
 
     Supported message types:
     - test.message  — Phase 4 connectivity test, echoes back a test.ack.
-    - clipboard.update — Phase 5: store text clipboard content and return clipboard.ack.
+    - clipboard.update — Phase 5: store text clipboard content, return clipboard.ack,
+      and broadcast a clipboard.remote_update to other connected clients (Phase 7).
     """
 
     async def connect(self) -> None:
         self.device_id = self._get_device_id()
+        await self.channel_layer.group_add(GROUP_NAME, self.channel_name)
         await self.accept()
         logger.info("WebSocket connection accepted for device %s.", self.device_id or "unknown")
 
     async def disconnect(self, close_code: int) -> None:
+        await self.channel_layer.group_discard(GROUP_NAME, self.channel_name)
         logger.info(
             "WebSocket disconnected for device %s with code %s.",
             getattr(self, "device_id", None) or "unknown",
@@ -101,6 +107,35 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
             )
         )
         logger.info("Clipboard acknowledgement sent to device %s.", device_id)
+
+        await self.channel_layer.group_send(
+            GROUP_NAME,
+            {
+                "type": "clipboard_broadcast",
+                "sender_device_id": device_id,
+                "content": content,
+            },
+        )
+
+    async def clipboard_broadcast(self, event: dict) -> None:
+        """Broadcast a remote clipboard update to connected clients except the sender."""
+        sender_device_id = event.get("sender_device_id")
+        if sender_device_id != self.device_id:
+            content = event.get("content", "")
+            await self.send(
+                text_data=json.dumps(
+                    {
+                        "type": "clipboard.remote_update",
+                        "device_id": sender_device_id,
+                        "content": content,
+                    }
+                )
+            )
+            logger.info(
+                "Broadcasted remote clipboard update from device %s to device %s.",
+                sender_device_id,
+                self.device_id or "unknown",
+            )
 
     def _get_device_id(self) -> str | None:
         query = parse_qs(self.scope["query_string"].decode("utf-8"))

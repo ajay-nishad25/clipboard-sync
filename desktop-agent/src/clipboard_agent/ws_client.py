@@ -1,33 +1,31 @@
-"""WebSocket client for sending clipboard updates to the Django backend."""
+"""WebSocket client for sending and receiving clipboard updates with Django backend."""
 
 from __future__ import annotations
 
 import json
 import logging
+import queue
+import threading
 import time
+from collections.abc import Callable
 
-from websockets.sync.client import connect
+from websockets.sync.client import ClientConnection, connect
 
 # Reconnection backoff delays in seconds. Each failure advances to the next
 # delay (capped at the last value), so the sequence is 2 → 5 → 15 → 30 s.
 _BACKOFF_DELAYS = (2, 5, 15, 30)
 
+RemoteUpdateHandler = Callable[[str, str], object]
+
 
 class ClipboardWebSocketClient:
-    """Send clipboard.update messages over a persistent WebSocket connection.
+    """Send clipboard.update messages and receive clipboard.remote_update messages.
 
     Connection lifecycle:
-    - The connection is established lazily on the first send().
-    - If the connection is lost, the client reconnects on the next send() call,
-      provided the backoff window has elapsed.
-    - Reconnection uses bounded exponential-ish backoff: 2 s → 5 s → 15 s →
-      30 s. The backoff counter resets after a successful send.
-    - A failed send returns False and schedules the next retry. The clipboard
-      monitor continues running; the missed value is not queued or retried.
-
-    Thread safety:
-    - This client is not thread-safe. Use it from a single thread (the
-      monitoring loop).
+    - Established lazily on the first send() or connect call.
+    - Runs a background listener thread to receive incoming server messages.
+    - Reconnection uses bounded backoff: 2 s → 5 s → 15 s → 30 s.
+    - Clean thread shutdown on close().
     """
 
     def __init__(
@@ -35,11 +33,20 @@ class ClipboardWebSocketClient:
         ws_url: str,
         device_id: str,
         logger: logging.Logger,
+        on_remote_update: RemoteUpdateHandler | None = None,
     ) -> None:
         self._base_url = ws_url.rstrip("/") + "/"
         self._device_id = device_id
         self._logger = logger
-        self._connection = None
+        self._on_remote_update = on_remote_update
+
+        self._connection: ClientConnection | None = None
+        self._connection_lock = threading.RLock()
+        self._listen_thread: threading.Thread | None = None
+        self._running = False
+
+        self._ack_queue: queue.Queue[dict] = queue.Queue()
+
         self._backoff_index = 0
         self._retry_after = 0.0  # time.monotonic() value
 
@@ -59,19 +66,31 @@ class ClipboardWebSocketClient:
                 "content": content,
             }
         )
-        try:
-            self._connection.send(payload)
-            raw = self._connection.recv(timeout=10)
-        except Exception as error:
-            self._logger.warning("WebSocket send failed: %s", error)
-            self._close_connection()
-            self._advance_backoff()
-            return False
+
+        # Clear any stale ACKs before sending
+        while not self._ack_queue.empty():
+            try:
+                self._ack_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        with self._connection_lock:
+            if self._connection is None:
+                return False
+            try:
+                self._connection.send(payload)
+            except Exception as error:
+                self._logger.warning("WebSocket send failed: %s", error)
+                self._close_connection()
+                self._advance_backoff()
+                return False
 
         try:
-            response = json.loads(raw)
-        except json.JSONDecodeError:
-            self._logger.warning("WebSocket received non-JSON acknowledgement.")
+            response = self._ack_queue.get(timeout=10.0)
+        except queue.Empty:
+            self._logger.warning("WebSocket send timed out waiting for ACK.")
+            self._close_connection()
+            self._advance_backoff()
             return False
 
         if response.get("type") == "clipboard.ack":
@@ -87,17 +106,21 @@ class ClipboardWebSocketClient:
         return False
 
     def close(self) -> None:
-        """Close the WebSocket connection gracefully."""
+        """Close the WebSocket connection gracefully and stop the listener thread."""
+        self._running = False
         self._close_connection()
+        if self._listen_thread is not None and self._listen_thread.is_alive():
+            self._listen_thread.join(timeout=2.0)
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Internal helpers & listener loop
     # ------------------------------------------------------------------
 
     def _ensure_connected(self) -> bool:
         """Return True if a connection is available or was just established."""
-        if self._connection is not None:
-            return True
+        with self._connection_lock:
+            if self._connection is not None:
+                return True
 
         if time.monotonic() < self._retry_after:
             return False
@@ -108,22 +131,79 @@ class ClipboardWebSocketClient:
         """Try to open a new connection; return True on success."""
         url = self._build_url()
         try:
-            self._connection = connect(url)
+            conn = connect(url)
+            with self._connection_lock:
+                self._connection = conn
+                self._running = True
+                self._listen_thread = threading.Thread(
+                    target=self._listen_loop,
+                    daemon=True,
+                    name="ws-listener",
+                )
+                self._listen_thread.start()
             self._logger.info("WebSocket connection established to %s.", url)
             return True
         except Exception as error:
             self._logger.warning("WebSocket connection failed: %s", error)
-            self._connection = None
+            with self._connection_lock:
+                self._connection = None
             self._advance_backoff()
             return False
 
-    def _close_connection(self) -> None:
-        if self._connection is not None:
+    def _listen_loop(self) -> None:
+        """Background listener thread reading incoming WebSocket messages."""
+        while self._running:
+            conn = self._connection
+            if conn is None:
+                break
+
             try:
-                self._connection.close()
+                raw = conn.recv()
             except Exception:
-                pass
-            self._connection = None
+                if self._running:
+                    self._logger.debug("WebSocket connection closed in listener thread.")
+                    self._advance_backoff()
+                break
+
+            try:
+                message = json.loads(raw)
+            except json.JSONDecodeError:
+                self._logger.warning("WebSocket received non-JSON message.")
+                continue
+
+            msg_type = message.get("type")
+            if msg_type in ("clipboard.ack", "error"):
+                self._ack_queue.put(message)
+            elif msg_type == "clipboard.remote_update":
+                sender_id = message.get("device_id", "unknown")
+                content = message.get("content", "")
+                self._logger.info(
+                    "Received remote clipboard update from %s (%d chars).",
+                    sender_id,
+                    len(content),
+                )
+                if self._on_remote_update is not None:
+                    try:
+                        self._on_remote_update(sender_id, content)
+                    except Exception:
+                        self._logger.exception("Error in on_remote_update handler.")
+            else:
+                self._logger.debug("Unhandled WebSocket message type: %s", msg_type)
+
+        with self._connection_lock:
+            self._close_connection()
+
+        if self._running and self._ack_queue.empty():
+            self._ack_queue.put({"type": "error", "code": "disconnected", "detail": "Connection closed"})
+
+    def _close_connection(self) -> None:
+        with self._connection_lock:
+            if self._connection is not None:
+                try:
+                    self._connection.close()
+                except Exception:
+                    pass
+                self._connection = None
 
     def _build_url(self) -> str:
         """Return the WebSocket URL with the device_id query parameter."""

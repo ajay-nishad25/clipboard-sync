@@ -30,6 +30,10 @@ class ClipboardMonitor:
         self._last_content: str | None = None
         self._last_error: str | None = None
 
+    def set_last_content(self, content: str) -> None:
+        """Update last_content to prevent triggering a local change for remote updates."""
+        self._last_content = content
+
     def poll_once(self) -> None:
         """Read and process one clipboard value without stopping on failures."""
         try:

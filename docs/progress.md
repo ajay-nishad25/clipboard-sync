@@ -6,8 +6,8 @@
 - [x] Phase 3 — Desktop Agent to Backend
 - [x] Phase 4 — WebSocket Infrastructure
 - [x] Phase 5 — Desktop Real-Time WebSocket Sync
-- [ ] Phase 6 — Android Application
-- [ ] Phase 7 — Android Clipboard Integration
+- [x] Phase 6 — Android Application
+- [x] Phase 7 — Server-Side Broadcasting & Remote Desktop Clipboard Update
 
 ## Phase 0 outcome
 
@@ -66,3 +66,25 @@ Verification results:
 Limitations: clipboard values missed during WebSocket outages are not queued;
 `InMemoryChannelLayer` does not persist across server restarts; no event_id or
 source_device loop prevention yet.
+
+## Phase 6 outcome
+
+Implemented manual Android clipboard synchronization to comply with Android 10+ background clipboard restrictions:
+- User-triggered manual `[ SEND CLIPBOARD ]` button reads system clipboard in user-focused `MainActivity` and sends over WebSocket.
+- User-triggered manual `[ RECEIVE CLIPBOARD ]` button fetches latest backend clipboard entry via `GET /api/clipboard/latest/` and applies it to the Android clipboard.
+- Foreground service `ClipboardMonitorService` manages WebSocket lifecycle without background clipboard harvesting.
+- Verified on physical Realme Android 14 (API 34) device.
+
+## Phase 7 outcome
+
+Implemented Django WebSocket update broadcasting and Python Desktop Agent remote update application with feedback loop prevention:
+- `backend/clipboard/consumers.py`: Connected clients join `clipboard_sync_group`. Valid `clipboard.update` messages trigger a `group_send` that broadcasts `clipboard.remote_update` (`device_id`, `content`) to all connected clients except the sender.
+- `desktop-agent/src/clipboard_agent/ws_client.py`: Added background listener thread with thread-safe `queue.Queue` ACK dispatching and `on_remote_update` callback handling.
+- `desktop-agent/src/clipboard_agent/monitor.py`: Added `set_last_content(content)` to update internal state when remote content is written via `pyperclip.copy()`.
+- `desktop-agent/src/clipboard_agent/cli.py`: Wired `on_remote_update` callback to execute `pyperclip.copy(content)` and `monitor.set_last_content(content)`.
+- Loop Prevention: Setting `monitor.set_last_content(content)` ensures subsequent polling (`content == self._last_content`) suppresses outbound sync automatically.
+
+Verification results:
+- Backend: 17/17 tests passing (including 2 new broadcasting tests).
+- Desktop Agent: 39/39 unit tests passing (including loop suppression and remote update callback tests).
+- Android: 22/22 Gradle tasks UP-TO-DATE, unit tests passing, APK assembleDebug successful. 0 Android files modified.

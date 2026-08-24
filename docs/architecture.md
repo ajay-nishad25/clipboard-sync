@@ -19,36 +19,35 @@ Desktop Agent (Python)  ── WebSocket ──┐
 Android App (Java)     ── WebSocket ──┘
 ```
 
-## Current implementation (Phase 5)
+## Current implementation (Phase 7)
 
 ```text
 Windows Clipboard
-      │  (poll every 0.5 s via pyperclip)
+      ▲  (apply remote_update via pyperclip.copy)
+      │  (set_last_content prevents feedback loop)
       ▼
-ClipboardMonitor
-      │  (new text only; duplicates dropped)
+ClipboardMonitor (desktop-agent)
+      │  (poll every 0.5 s; send new text only)
       ▼
-ClipboardWebSocketClient.send(content)
-      │  websockets.sync.client  (persistent connection)
-      │  ws://127.0.0.1:8000/ws/clipboard/?device_id=desktop-001
+ClipboardWebSocketClient (desktop-agent)
+      │  - Main thread: send(content) → clipboard.update
+      │  - Listener thread: recv() → queue dispatch & remote update callback
       ▼
 Django Backend (Daphne — HTTP + WebSocket on same port)
       │
       ├─── HTTP ──► REST API
-      │             POST /api/clipboard/    → ClipboardEntry + 201
-      │             GET  /api/clipboard/latest/ → latest entry
+      │             GET  /api/clipboard/latest/ → Android [RECEIVE CLIPBOARD]
       │
-      └─── WS ───► ClipboardConsumer
-                   clipboard.update  → validate → ClipboardEntry.objects.create → clipboard.ack
-                   test.message      → test.ack
+      └─── WS ───► ClipboardConsumer (Group: clipboard_sync_group)
+                   clipboard.update  → ClipboardEntry.create() → clipboard.ack to sender
+                                     → group_send() broadcast clipboard.remote_update to others
 ```
 
 The desktop agent maintains one persistent WebSocket connection. On connection
-loss it reconnects with bounded exponential backoff (2 s → 5 s → 15 s → 30 s).
+loss it reconnects with bounded backoff (2 s → 5 s → 15 s → 30 s).
 Clipboard values that arrive during an outage are not queued.
 
-The REST API is kept intact for regression testing and future use. The desktop
-agent no longer drives HTTP for clipboard sync; only WebSocket is used.
+The REST API is kept intact for regression testing and Android manual fetch.
 
 ## Identity and authentication roadmap
 
@@ -61,14 +60,15 @@ device pairing.
 Only plain text clipboard data is in scope. Images, files, rich text,
 screenshots, passwords, and arbitrary binary clipboard data are excluded.
 
-## Event-loop prevention (planned)
+## Event-loop prevention (Phase 7)
 
-Each synchronization event will have a unique event ID and source device ID.
-When a client applies a received event to its clipboard, it must recognize that
-change as synchronization-generated and not send it back.
+When Desktop Agent receives `clipboard.remote_update` over WebSocket:
+1. It writes the text to the Windows clipboard via `pyperclip.copy(content)`.
+2. It immediately updates `ClipboardMonitor.set_last_content(content)`.
+3. When the monitoring loop polls `read_clipboard()` 0.5s later, `content == self._last_content` evaluates to `True`, automatically suppressing outbound synchronization and preventing feedback loops.
 
 ## Channel layer
 
-Phase 5 uses `InMemoryChannelLayer`. It is not shared across processes and
+Phase 7 uses `InMemoryChannelLayer`. It is not shared across processes and
 resets on server restart. Redis will be introduced only if a concrete
 multi-process deployment need requires it.

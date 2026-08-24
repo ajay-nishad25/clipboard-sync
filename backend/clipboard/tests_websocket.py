@@ -154,3 +154,47 @@ class ClipboardUpdateWebSocketTests(TestCase):
         self.assertEqual(response["type"], "error")
         self.assertEqual(response["code"], "invalid_content")
         await communicator.disconnect()
+
+    @async_to_sync
+    async def test_clipboard_update_broadcasts_to_other_clients(self) -> None:
+        client_a = WebsocketCommunicator(application, "/ws/clipboard/?device_id=android-001")
+        client_b = WebsocketCommunicator(application, "/ws/clipboard/?device_id=desktop-001")
+
+        connected_a, _ = await client_a.connect()
+        connected_b, _ = await client_b.connect()
+        self.assertTrue(connected_a)
+        self.assertTrue(connected_b)
+
+        await client_a.send_json_to(
+            {"type": "clipboard.update", "device_id": "android-001", "content": "Hello from Android"}
+        )
+
+        ack = await client_a.receive_json_from()
+        self.assertEqual(ack["type"], "clipboard.ack")
+
+        broadcast = await client_b.receive_json_from()
+        self.assertEqual(broadcast["type"], "clipboard.remote_update")
+        self.assertEqual(broadcast["device_id"], "android-001")
+        self.assertEqual(broadcast["content"], "Hello from Android")
+
+        await client_a.disconnect()
+        await client_b.disconnect()
+
+    @async_to_sync
+    async def test_clipboard_update_does_not_broadcast_to_sender(self) -> None:
+        client_a = WebsocketCommunicator(application, "/ws/clipboard/?device_id=desktop-001")
+        connected_a, _ = await client_a.connect()
+        self.assertTrue(connected_a)
+
+        await client_a.send_json_to(
+            {"type": "clipboard.update", "device_id": "desktop-001", "content": "Hello from Desktop"}
+        )
+
+        ack = await client_a.receive_json_from()
+        self.assertEqual(ack["type"], "clipboard.ack")
+
+        # Confirm the sender receives no remote_update message
+        nothing = await client_a.receive_nothing()
+        self.assertTrue(nothing)
+
+        await client_a.disconnect()
