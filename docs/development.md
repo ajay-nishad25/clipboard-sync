@@ -1,111 +1,91 @@
 # Development Guide
 
-## Phase-by-phase workflow
+## Phase-by-Phase Workflow
 
-Work on one phase at a time. Before proceeding, run relevant checks, document
-the result, and confirm the phase has a working, testable state.
-
-## Current setup
-
-### Phase 1 — Desktop clipboard detection
-
-`desktop-agent/` polls the OS clipboard via `pyperclip` and logs each new
-non-empty text value once.
-
-### Phase 2 — Django backend
-
-`backend/` is a Django project with Django REST Framework and SQLite. The
-`ClipboardEntry` model and HTTP API are covered by Django's test runner.
-
-### Phase 3 — Desktop agent to backend
-
-`desktop-agent/` sends clipboard text to `POST /api/clipboard/` via `requests`.
-The HTTP `ClipboardBackendClient` class is retained for regression tests.
-
-### Phase 4 — WebSocket infrastructure
-
-`backend/` now runs under Daphne and handles WebSocket connections via Django
-Channels. `ClipboardConsumer` accepts `test.message` and returns `test.ack`.
-
-### Phase 5 — Desktop real-time WebSocket sync
-
-`clipboard.update` is now the primary clipboard sync message. The desktop agent
-uses `ClipboardWebSocketClient` (websockets sync API) as its transport, with
-bounded-backoff reconnection.
+Work on one phase at a time. Before proceeding, run relevant checks, document the result, and confirm the phase has a working, testable state.
 
 ---
 
-## Backend setup
+## Current Verified Baseline (Phases 1–9C)
 
+### Phase 1 — Desktop Clipboard Detection
+`desktop-agent/` polls OS clipboard via `pyperclip` and logs each distinct text value.
+
+### Phase 2 — Django Backend
+`backend/` Django REST Framework & SQLite backend (`ClipboardEntry` model, HTTP API).
+
+### Phase 3 — Desktop Agent to Backend HTTP
+`desktop-agent/` sends text to `POST /api/clipboard/` via `requests`.
+
+### Phase 4 — WebSocket Infrastructure
+Daphne serves HTTP and WebSocket via Django Channels (`test.message` / `test.ack`).
+
+### Phase 5 — Desktop Real-Time WebSocket Sync
+`clipboard.update` / `clipboard.ack` over `ClipboardWebSocketClient` with bounded-backoff reconnection.
+
+### Phase 6 — Android Application
+Manual Android clipboard sync (`[ SEND CLIPBOARD ]` over WS, `[ RECEIVE CLIPBOARD ]` over HTTP GET) adhering to Android 10+ background clipboard access rules.
+
+### Phase 7 — Bidirectional Update Broadcasting
+Server broadcasts `clipboard.remote_update` to connected devices. Desktop Agent applies updates via `pyperclip.copy()` and suppresses outbound sync loops via `monitor.set_last_content()`.
+
+### Phase 8 — Desktop Catch-Up & Persistent Identity
+Desktop Agent recovers `GET /api/clipboard/latest/` on startup/reconnect. Persistent UUID device IDs for Desktop (`~/.clipboard_sync/device_id.txt`) and Android (`SharedPreferences`).
+
+### Phase 9A — Multi-User Data Model & User Isolation
+`Device` and `ClipboardState` models. Single active record per user with 10-minute expiration. User-scoped WebSocket channel groups (`clipboard_user_<user_id>`).
+
+### Phase 9B — Desktop ↔ Android Device Pairing
+Temporary pairing code generation (`AB7K-29XM`, 5-min expiration) on Desktop startup (`POST /api/device/pairing/create/`). Android pairing section in `MainActivity` with `POST /api/device/pair/` endpoint associating Android Device with Desktop's owner User.
+
+### Phase 9C — Authenticated Device Credentials & Communication
+Opaque secret token generation (`devtok_...`) with backend SHA-256 hashing (`DeviceCredential`). REST API Bearer token authentication (`Authorization: Bearer <token>`), WebSocket connection token validation (`?token=<token>`), token revocation, and unpair workflow.
+
+---
+
+## Component Setup & Testing Commands (Baseline)
+
+### 1. Backend Setup & Tests (30 tests total)
 ```powershell
 cd backend
-py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e .
-python manage.py migrate
-python manage.py runserver      # Daphne serves HTTP + WebSocket
-```
-
-Run all tests (15 total):
-
-```powershell
+python manage.py check
+python manage.py makemigrations --check
 python manage.py test
 ```
 
-Smoke test (server must be running):
-
-```powershell
-python scripts/websocket_smoke_test.py
-```
-
-## Desktop-agent setup
-
+### 2. Desktop Agent Setup & Tests (46 tests total)
 ```powershell
 cd desktop-agent
-py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e .      # installs pyperclip, requests, websockets
-clipboard-agent
-```
-
-Run all tests (37 total):
-
-```powershell
 python -m unittest discover -s tests -v
 ```
 
-## Manual integration test
-
-1. Start Django (`python manage.py runserver` from `backend/`).
-2. Start the agent (`clipboard-agent` from `desktop-agent/`).
-3. Copy text on Windows.
-4. Confirm sync log in the agent terminal.
-5. Verify with: `Invoke-RestMethod -Uri http://127.0.0.1:8000/api/clipboard/latest/`
-
-## Failure/recovery test
-
-1. Start the agent, confirm a successful sync.
-2. Stop Django. Copy text. Confirm the agent logs a failure without crashing.
-3. Restart Django. Copy a new value. Confirm reconnection and sync.
-
-## Future work
-
-- Android Studio and Gradle instructions will be added when the Android project
-  is initialized.
-
-## Quality expectations
-
-Readable code, focused modules, useful logs, appropriate tests, clear error
-handling. Python follows PEP 8 and uses `logging`. Android stays in Java unless
-explicitly changed. Keep `.env` files and real credentials out of version
-control.
-
-## Git guidance
-
-Use small, logical commits. Example:
-
-```text
-feat: add clipboard.update WebSocket handler (Phase 5)
+### 3. Android App Setup & Tests (12 tests total)
+```powershell
+cd android-app
+.\gradlew.bat test
+.\gradlew.bat assembleDebug
 ```
+
+---
+
+## Phase 9 Sub-Phases Roadmap
+
+- [x] **Phase 9A — Multi-User Data Model & User Isolation**
+- [x] **Phase 9B — Desktop ↔ Android Pairing**
+- [x] **Phase 9C — Authenticated Device Credentials & Communication**
+- [ ] **Phase 9D — Production Configuration & HTTPS/WSS (PLANNED / NEXT)**
+  - Support configurable production transport endpoints (`https://` and `wss://`).
+  - Enforce TLS in production while retaining local HTTP/WS development options.
+- [ ] **Phase 9E — Production Deployment & Hardening (PLANNED / NEXT)**
+  - Configure PostgreSQL, Redis Channels layer, Daphne ASGI deployment, secrets management, and admin auditing.
+
+---
+
+## Quality & Security Expectations
+
+- **Plain Text Only**: No binary, image, screenshot, or rich-text data.
+- **Android Restrictions**: Do NOT attempt background clipboard harvesting on Android 10+. Maintain manual `[ SEND CLIPBOARD ]` and `[ RECEIVE CLIPBOARD ]` UI triggers.
+- **Privacy & Logging**: Raw credentials and clipboard content must never be printed to application logs or stored in plaintext on backend database.
+- **Secret Safety**: Never commit credentials, tokens, or `.env` files to git.

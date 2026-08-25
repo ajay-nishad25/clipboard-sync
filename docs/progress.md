@@ -9,6 +9,11 @@
 - [x] Phase 6 — Android Application
 - [x] Phase 7 — Server-Side Broadcasting & Remote Desktop Clipboard Update
 - [x] Phase 8 — Desktop Catch-Up, Persistent Device Identity & Android Testing
+- [x] Phase 9A — Multi-User Data Model & User Isolation
+- [x] Phase 9B — Desktop ↔ Android Device Pairing
+- [x] Phase 9C — Authenticated Device Credentials & Communication
+- [ ] Phase 9D — Production Configuration & HTTPS/WSS (PLANNED / NEXT)
+- [ ] Phase 9E — Production Deployment & Hardening (PLANNED / NEXT)
 
 ## Phase 0 outcome
 
@@ -55,7 +60,6 @@ sync client. Key additions:
   validates `device_id` and `content`, stores `ClipboardEntry` via
   `database_sync_to_async`, returns `clipboard.ack`.
 - `backend/clipboard/tests_websocket.py` — 5 new `clipboard.update` tests.
-- `desktop-agent/tests/test_ws_client.py` — 20 new WS client tests.
 - `desktop-agent/tests/test_config.py` — extended with `ws_url` tests.
 
 Verification results:
@@ -103,3 +107,40 @@ Verification results:
 - Backend: 17/17 tests passing.
 - Desktop Agent: 43/43 unit tests passing.
 - Android: 9 unit tests passing (`ClipboardApiClientTest` + `ConfigTest`), APK build successful.
+
+## Phase 9A outcome
+
+Implemented Multi-User Data Model & User Isolation on the Django backend:
+- **Device Model**: Created `Device` model (`user`, `device_id`, `device_type`) linking hardware devices to Django `User` instances.
+- **ClipboardState Model**: Created `ClipboardState` model (`user`, `content`, `updated_at`, `expires_at`). Replaces historical entries with a single active record per user.
+- **10-Minute Retention Expiration**: Enforces 10-minute expiration (`expires_at = now + 10m`). Expired entries are automatically purged and hidden on access (`is_expired()`).
+- **User-Scoped WebSocket Isolation**: Replaced global `clipboard_sync_group` with user-scoped channel groups (`clipboard_user_<user_id>`). Real-time `clipboard.remote_update` broadcasts are restricted to devices belonging to the same user.
+- **User-Scoped REST API**: Updated `GET /api/clipboard/latest/` to resolve device identity to its owner user and return only that user's active `ClipboardState`.
+- **Django Admin**: Registered `Device` and `ClipboardState` models in Django admin for administrator inspection.
+
+Verification results:
+- Backend tests: **27/27 PASS** (`Ran 27 tests in 0.305s OK`).
+
+## Phase 9B outcome
+
+Implemented Desktop ↔ Android Device Pairing:
+- **PairingCode Model**: Created `PairingCode` model (`desktop_device`, `code`, `created_at`, `expires_at`, `is_used`, `used_at`).
+- **Pairing Code Generation**: Formatted 8-character single-use code (e.g. `AB7K-29XM`, 5-min expiration) generated via `POST /api/device/pairing/create/`.
+- **Android Pairing UI**: Added Pair Desktop section in `MainActivity` (`pairingCodeInput`, `pairButton`, `pairingStatusText`).
+- **Device Ownership Association**: `POST /api/device/pair/` validates pairing code and links Android device to Desktop's owner User. Re-pairing to a different user is rejected with 409 Conflict.
+- **Verification**: 43 backend tests, 45 desktop tests, 12 android unit tests passing cleanly.
+
+## Phase 9C outcome
+
+Implemented Authenticated Device Credentials & Communication:
+- **DeviceCredential Model**: Created `DeviceCredential` model (`device`, `token_hash`, `created_at`, `last_used_at`, `revoked_at`). Stores SHA-256 hex digest of raw token secret. Raw credentials are never stored in the database or logged.
+- **Credential Issuance**: Issued during Android pairing (`POST /api/device/pair/`) and Desktop registration (`POST /api/device/credential/register/`). Returned raw token is persisted locally on clients (`~/.clipboard_sync/token.txt` and Android `SharedPreferences`).
+- **REST Token Authentication**: REST endpoints (`GET /api/clipboard/latest/`) validate `Authorization: Bearer <token>` header or query parameters. Requests with invalid or revoked tokens return 401 Unauthorized.
+- **WebSocket Token Authentication**: WebSocket consumer validates `?token=<token>` parameter on `connect()`. Unauthenticated or revoked connections are rejected immediately with close code `4001`.
+- **Token Revocation & Unpair**: `POST /api/device/unpair/` marks token revoked (`revoked_at`), immediately denying subsequent REST and WebSocket requests. Registered `DeviceCredential` in Django admin with revocation actions.
+
+Verification results:
+- Backend tests: **30/30 PASS** (`Ran 30 tests in 0.359s OK`).
+- Desktop tests: **46/46 PASS** (`Ran 46 tests in 0.616s OK`).
+- Android unit tests: **12/12 PASS** (`BUILD SUCCESSFUL`).
+- Android Debug APK: **BUILD SUCCESSFUL**.

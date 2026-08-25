@@ -11,6 +11,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -23,7 +24,7 @@ import com.clipboard.sync.api.ClipboardApiClient;
 /**
  * Main entry point for Clipboard Sync.
  * Provides user-controlled [SEND CLIPBOARD] and [RECEIVE CLIPBOARD] actions,
- * along with a Start/Stop service toggle and real-time status updates.
+ * device pairing with desktop accounts, and service toggles using authenticated credentials.
  */
 public class MainActivity extends AppCompatActivity {
 
@@ -32,6 +33,9 @@ public class MainActivity extends AppCompatActivity {
 
     private TextView statusText;
     private TextView logText;
+    private TextView pairingStatusText;
+    private EditText pairingCodeInput;
+    private Button pairButton;
     private Button sendButton;
     private Button receiveButton;
     private Button toggleButton;
@@ -72,17 +76,22 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        apiClient     = new ClipboardApiClient();
-        statusText    = findViewById(R.id.statusText);
-        logText       = findViewById(R.id.logText);
-        sendButton    = findViewById(R.id.sendButton);
-        receiveButton = findViewById(R.id.receiveButton);
-        toggleButton  = findViewById(R.id.toggleButton);
+        apiClient          = new ClipboardApiClient();
+        statusText         = findViewById(R.id.statusText);
+        logText            = findViewById(R.id.logText);
+        pairingStatusText  = findViewById(R.id.pairingStatusText);
+        pairingCodeInput   = findViewById(R.id.pairingCodeInput);
+        pairButton         = findViewById(R.id.pairButton);
+        sendButton         = findViewById(R.id.sendButton);
+        receiveButton      = findViewById(R.id.receiveButton);
+        toggleButton       = findViewById(R.id.toggleButton);
 
+        pairButton.setOnClickListener(v -> pairDevice());
         sendButton.setOnClickListener(v -> sendClipboard());
         receiveButton.setOnClickListener(v -> receiveClipboard());
         toggleButton.setOnClickListener(v -> toggleService());
 
+        updatePairingStatusDisplay();
         requestNotificationPermissionIfNeeded();
     }
 
@@ -92,12 +101,62 @@ public class MainActivity extends AppCompatActivity {
         IntentFilter filter = new IntentFilter(ClipboardMonitorService.ACTION_STATUS_UPDATE);
         ContextCompat.registerReceiver(this, statusReceiver, filter,
                 ContextCompat.RECEIVER_NOT_EXPORTED);
+        updatePairingStatusDisplay();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         unregisterReceiver(statusReceiver);
+    }
+
+    // ------------------------------------------------------------------
+    // DEVICE PAIRING WORKFLOW
+    // ------------------------------------------------------------------
+
+    private void pairDevice() {
+        String code = pairingCodeInput.getText() != null ? pairingCodeInput.getText().toString().trim() : "";
+        if (code.isEmpty()) {
+            Toast.makeText(this, "Please enter a pairing code.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String androidDeviceId = Config.getDeviceId(this);
+        pairingStatusText.setText(R.string.status_pairing_in_progress);
+
+        apiClient.pairDevice(Config.PAIRING_URL, code, androidDeviceId, new ClipboardApiClient.PairCallback() {
+            @Override
+            public void onSuccess(String statusVal, String credential, int userId) {
+                runOnUiThread(() -> {
+                    Config.setPaired(MainActivity.this, true);
+                    if (credential != null && !credential.trim().isEmpty()) {
+                        Config.setDeviceToken(MainActivity.this, credential.trim());
+                    }
+                    updatePairingStatusDisplay();
+                    pairingCodeInput.setText("");
+                    appendLog("Device paired with user #" + userId);
+                    Toast.makeText(MainActivity.this, R.string.status_paired_success, Toast.LENGTH_SHORT).show();
+                });
+            }
+
+            @Override
+            public void onError(int statusCode, String errorMessage) {
+                runOnUiThread(() -> {
+                    String errorDisplay = "Status: " + (errorMessage != null ? errorMessage : "Pairing failed");
+                    pairingStatusText.setText(errorDisplay);
+                    Toast.makeText(MainActivity.this, errorDisplay, Toast.LENGTH_LONG).show();
+                });
+            }
+        });
+    }
+
+    private void updatePairingStatusDisplay() {
+        boolean paired = Config.isPaired(this);
+        if (paired) {
+            pairingStatusText.setText(R.string.status_paired_success);
+        } else {
+            pairingStatusText.setText(R.string.status_not_paired);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -154,7 +213,8 @@ public class MainActivity extends AppCompatActivity {
     private void receiveClipboard() {
         statusText.setText(R.string.status_receiving);
 
-        apiClient.getLatestClipboard(Config.REST_LATEST_URL, new ClipboardApiClient.ApiCallback() {
+        String deviceToken = Config.getDeviceToken(this);
+        apiClient.getLatestClipboard(Config.REST_LATEST_URL, deviceToken, new ClipboardApiClient.ApiCallback() {
             @Override
             public void onSuccess(String content) {
                 runOnUiThread(() -> {

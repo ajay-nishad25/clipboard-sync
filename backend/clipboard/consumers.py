@@ -1,4 +1,4 @@
-"""WebSocket consumer for the clipboard application."""
+"""WebSocket consumer for user-isolated authenticated clipboard synchronization."""
 
 from __future__ import annotations
 
@@ -10,30 +10,49 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 from clipboard.models import ClipboardEntry
+from clipboard.services import authenticate_device_token, set_user_clipboard
 
 logger = logging.getLogger(__name__)
 
 
-GROUP_NAME = "clipboard_sync_group"
-
-
 class ClipboardConsumer(AsyncWebsocketConsumer):
-    """Handle WebSocket connections for clipboard synchronization.
+    """Handle WebSocket connections for authenticated clipboard synchronization with user data isolation.
 
     Supported message types:
-    - test.message  — Phase 4 connectivity test, echoes back a test.ack.
-    - clipboard.update — Phase 5: store text clipboard content, return clipboard.ack,
-      and broadcast a clipboard.remote_update to other connected clients (Phase 7).
+    - test.message — Connectivity test, echoes back test.ack.
+    - clipboard.update — Store text clipboard content in user's ClipboardState,
+      return clipboard.ack, and broadcast clipboard.remote_update ONLY to devices
+      belonging to the SAME user (user-scoped group: clipboard_user_<user_id>).
     """
 
     async def connect(self) -> None:
-        self.device_id = self._get_device_id()
-        await self.channel_layer.group_add(GROUP_NAME, self.channel_name)
+        self.raw_token = self._get_token()
+        self.cred, self.device, self.user = None, None, None
+        self.group_name = None
+        self.device_id = None
+
+        if self.raw_token:
+            self.cred, self.device, self.user = await database_sync_to_async(authenticate_device_token)(self.raw_token)
+
+        if not self.cred or not self.device or not self.user:
+            logger.warning("Rejecting unauthenticated WebSocket connection.")
+            await self.close(code=4001)
+            return
+
+        self.device_id = self.device.device_id
+        self.group_name = f"clipboard_user_{self.user.id}"
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+
         await self.accept()
-        logger.info("WebSocket connection accepted for device %s.", self.device_id or "unknown")
+        logger.info(
+            "WebSocket connection accepted for authenticated device %s (User %s).",
+            self.device_id,
+            self.user.username,
+        )
 
     async def disconnect(self, close_code: int) -> None:
-        await self.channel_layer.group_discard(GROUP_NAME, self.channel_name)
+        if self.group_name:
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
         logger.info(
             "WebSocket disconnected for device %s with code %s.",
             getattr(self, "device_id", None) or "unknown",
@@ -76,17 +95,8 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
 
         logger.info("WebSocket test message received from device %s.", self.device_id or "unknown")
         await self.send(text_data=json.dumps({"type": "test.ack", "message": text}))
-        logger.info("WebSocket acknowledgement sent to device %s.", self.device_id or "unknown")
 
     async def _handle_clipboard_update(self, message: dict) -> None:
-        device_id = message.get("device_id")
-        if not isinstance(device_id, str) or not device_id.strip():
-            await self._send_error(
-                "invalid_message",
-                "clipboard.update requires a non-empty device_id string.",
-            )
-            return
-
         content = message.get("content")
         if not isinstance(content, str) or not content:
             await self._send_error(
@@ -95,21 +105,33 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
             )
             return
 
+        if not self.user or not self.device:
+            await self._send_error("unauthorized", "Unauthenticated WebSocket connection.")
+            return
+
+        device_id = self.device.device_id
+
+        # Replace active ClipboardState for user (10-minute expiration)
+        await database_sync_to_async(set_user_clipboard)(self.user, content)
+
+        # Store legacy ClipboardEntry log
         await database_sync_to_async(ClipboardEntry.objects.create)(
             device_id=device_id,
             content=content,
         )
-        logger.info("Clipboard entry stored from device %s via WebSocket.", device_id)
 
+        logger.info("ClipboardState updated for user %s via device %s.", self.user.username, device_id)
+
+        # Send ACK to sender
         await self.send(
             text_data=json.dumps(
                 {"type": "clipboard.ack", "device_id": device_id, "status": "stored"}
             )
         )
-        logger.info("Clipboard acknowledgement sent to device %s.", device_id)
 
+        # Broadcast remote_update ONLY to user's isolated channel group
         await self.channel_layer.group_send(
-            GROUP_NAME,
+            self.group_name,
             {
                 "type": "clipboard_broadcast",
                 "sender_device_id": device_id,
@@ -118,7 +140,7 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
         )
 
     async def clipboard_broadcast(self, event: dict) -> None:
-        """Broadcast a remote clipboard update to connected clients except the sender."""
+        """Broadcast a remote clipboard update to connected devices belonging to the same user."""
         sender_device_id = event.get("sender_device_id")
         if sender_device_id != self.device_id:
             content = event.get("content", "")
@@ -137,10 +159,18 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
                 self.device_id or "unknown",
             )
 
-    def _get_device_id(self) -> str | None:
+    def _get_token(self) -> str | None:
         query = parse_qs(self.scope["query_string"].decode("utf-8"))
-        values = query.get("device_id")
-        return values[0] if values else None
+        tokens = query.get("token")
+        if tokens and tokens[0].strip():
+            return tokens[0].strip()
+
+        # Development fallback query param
+        device_ids = query.get("device_id")
+        if device_ids and device_ids[0].strip():
+            return device_ids[0].strip()
+
+        return None
 
     async def _send_error(self, code: str, detail: str) -> None:
         logger.warning("Invalid WebSocket message from device %s: %s.", self.device_id or "unknown", code)

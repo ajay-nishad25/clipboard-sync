@@ -2,73 +2,95 @@
 
 ## Goal
 
-The project will make a text value copied on either a desktop computer or an
-Android phone available on the other device in near real time. It is a POC for
-one user's devices, not a production service.
+The project synchronizes plain text clipboard data between a user's Windows desktop computer and an Android phone in near real time using authenticated device credentials and user data isolation.
 
-## Planned components
+---
 
-```text
-Desktop Agent (Python)  ── WebSocket ──┐
-                                       │
-                               Django Backend
-                               - REST API
-                               - Channels/WebSocket
-                               - SQLite
-                                       │
-Android App (Java)     ── WebSocket ──┘
-```
-
-## Current implementation (Phase 7)
+## Implemented Architecture (Phases 1–9C Baseline)
 
 ```text
 Windows Clipboard
-      ▲  (apply remote_update via pyperclip.copy)
+      ▲  (apply remote_update / catch-up via pyperclip.copy)
       │  (set_last_content prevents feedback loop)
       ▼
-ClipboardMonitor (desktop-agent)
-      │  (poll every 0.5 s; send new text only)
+ClipboardMonitor (desktop-agent — persistent device ID: desktop-<uuid>, credential: devtok_...)
+      │  - Generates/displays pairing code (e.g. AB7K-29XM) via POST /api/device/pairing/create/
+      │  - Connects to WS with ?token=<credential>
+      │  - Polls Windows clipboard every 0.5 s; sends new text only
       ▼
 ClipboardWebSocketClient (desktop-agent)
       │  - Main thread: send(content) → clipboard.update
       │  - Listener thread: recv() → queue dispatch & remote update callback
+      │  - On Connect: fetch GET /api/clipboard/latest/ with Authorization: Bearer <credential>
       ▼
-Django Backend (Daphne — HTTP + WebSocket on same port)
+Django Backend (Daphne — HTTP + WebSocket on 127.0.0.1:8000)
       │
-      ├─── HTTP ──► REST API
-      │             GET  /api/clipboard/latest/ → Android [RECEIVE CLIPBOARD]
+      ├─── Token Authentication ───────► DeviceCredential (SHA-256 token_hash) ──► Device ──► User A
+      │                                                                                         ▲
+      │                                                                                         │ (Bearer <token>)
+      │                                                                               Android App (Java)
       │
-      └─── WS ───► ClipboardConsumer (Group: clipboard_sync_group)
-                   clipboard.update  → ClipboardEntry.create() → clipboard.ack to sender
-                                     → group_send() broadcast clipboard.remote_update to others
+      ├─── REST API ──────────────────► GET /api/clipboard/latest/ (Authorization: Bearer <token>)
+      │                                 (Returns caller User's active ClipboardState if < 10m old)
+      │
+      └─── WS ────────────────────────► ClipboardConsumer (User Group: clipboard_user_<user_id>)
+                                        Authenticate ?token=<token> → join user_group
+                                        clipboard.update → set_user_clipboard() → clipboard.ack to sender
+                                                        → group_send() broadcast clipboard.remote_update to user group
 ```
 
-The desktop agent maintains one persistent WebSocket connection. On connection
-loss it reconnects with bounded backoff (2 s → 5 s → 15 s → 30 s).
-Clipboard values that arrive during an outage are not queued.
+### Android Architecture Constraints (MUST NOT BE CHANGED)
+Android complies strictly with Android 10+ background clipboard restrictions (API 29+):
+- **No Background Clipboard Harvesting**: Background services cannot access `ClipboardManager.getPrimaryClip()`.
+- **Pair Desktop UI**: User enters 8-character code (e.g. `AB7K-29XM`) in `MainActivity` to pair with Desktop's owner User account (`POST /api/device/pair/`). Receives and stores `device_token` secret in `SharedPreferences`.
+- **Manual SEND**: User taps `[ SEND CLIPBOARD ]` in user-focused `MainActivity`, transmitting text over authenticated WebSocket (`?token=<device_token>`).
+- **Manual RECEIVE**: User taps `[ RECEIVE CLIPBOARD ]`, fetching the latest entry via `GET /api/clipboard/latest/` HTTP REST with `Authorization: Bearer <device_token>`.
+- **Persistent Device ID & Token**: Saved in Android `SharedPreferences`.
 
-The REST API is kept intact for regression testing and Android manual fetch.
+---
 
-## Identity and authentication roadmap
+## Multi-User & Authenticated Security Architecture (Phase 9)
 
-Phase 0 has no authentication. Early development uses development IDs/tokens.
-Planned order: development token → user/device authentication → Google OAuth →
-device pairing.
+Phase 9 transitions the project from a single-user proof-of-concept to a multi-user architecture centered around **User Data Isolation** and **Authenticated Device Credentials**.
 
-## Data boundary
+### 1. Authenticated Device Ownership Model
+- **Ownership Hierarchy**:
+  ```text
+  User (User ID)
+   ├── Desktop Device (desktop-<uuid>) ── DeviceCredential (SHA-256 token_hash)
+   └── Android Device (android-<uuid>) ── DeviceCredential (SHA-256 token_hash)
+  ```
+- **Credential Issuance & Authentication Flow (Phase 9C Implemented)**:
+  - **Pairing Bootstrap**: Android pairing (`POST /api/device/pair/`) issues an opaque device credential token (`devtok_<32 hex chars>`) stored in client `SharedPreferences`.
+  - **Desktop Registration**: Desktop requests/registers credential on boot (`POST /api/device/credential/register/`) and persists token in `~/.clipboard_sync/token.txt`.
+  - **Backend Storage**: Raw tokens are **never** stored in database; only SHA-256 hex digests (`token_hash`) are saved in `DeviceCredential`.
+  - **REST Auth**: `Authorization: Bearer <token>` header required for all clipboard data operations.
+  - **WebSocket Auth**: `?token=<token>` query parameter validated on connect (`connect()`). Connections without valid/active tokens are rejected with code `4001`.
+  - **Revocation & Unpair**: Setting `revoked_at` timestamp immediately invalidates token for all future REST and WebSocket authentication.
 
-Only plain text clipboard data is in scope. Images, files, rich text,
-screenshots, passwords, and arbitrary binary clipboard data are excluded.
+---
 
-## Event-loop prevention (Phase 7)
+### 2. User Clipboard Data Model & Expiration
+- **Single Active Entry per User**: Each user has exactly **one** current clipboard record (`ClipboardState`), replacing historical logs.
+- **10-Minute Expiration**: `expires_at` is set to `now + 10 minutes`. On access, if `expires_at <= now`, the record is automatically purged from the database and returns 404 Not Found.
 
-When Desktop Agent receives `clipboard.remote_update` over WebSocket:
-1. It writes the text to the Windows clipboard via `pyperclip.copy(content)`.
-2. It immediately updates `ClipboardMonitor.set_last_content(content)`.
-3. When the monitoring loop polls `read_clipboard()` 0.5s later, `content == self._last_content` evaluates to `True`, automatically suppressing outbound synchronization and preventing feedback loops.
+---
 
-## Channel layer
+### 3. User-Scoped WebSocket Routing
+- **Group Name**: User-scoped channel groups: `clipboard_user_<user_id>`.
+- **Data Flow**: Broadcasts (`clipboard.remote_update`) remain within `clipboard_user_<user_id>` and never cross user boundary lines.
 
-Phase 7 uses `InMemoryChannelLayer`. It is not shared across processes and
-resets on server restart. Redis will be introduced only if a concrete
-multi-process deployment need requires it.
+---
+
+### 4. Infrastructure Roadmap
+
+| Component | Current Implemented (Phases 1–9C) | Production Target (Phases 9D–9E) |
+|---|---|---|
+| **Database** | SQLite | PostgreSQL |
+| **Channel Layer** | `InMemoryChannelLayer` | Redis Channel Layer |
+| **Transport** | `http://`, `ws://` | `https://`, `wss://` (TLS) |
+| **Routing** | User-Scoped `clipboard_user_<user_id>` | User-Scoped `clipboard_user_<user_id>` |
+| **Device Pairing** | Temporary pairing code (`AB7K-29XM`) | Temporary pairing code (`AB7K-29XM`) |
+| **Authentication** | Token Auth (SHA-256 Hashing, Bearer & `?token=`) | Token Auth + TLS Certificate Validation |
+| **Retention** | Single record per user, 10-min expiration | Single record per user, 10-min expiration |
+| **Android Workflow** | Manual SEND / RECEIVE + Pairing UI | Manual SEND / RECEIVE + Pairing UI |

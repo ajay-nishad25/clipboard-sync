@@ -12,6 +12,8 @@ public final class Config {
 
     public static final String WS_BASE_URL = "ws://127.0.0.1:8000/ws/clipboard/";
     public static final String REST_LATEST_URL = "http://127.0.0.1:8000/api/clipboard/latest/";
+    public static final String PAIRING_URL = "http://127.0.0.1:8000/api/device/pair/";
+    public static final String UNPAIR_URL = "http://127.0.0.1:8000/api/device/unpair/";
     public static final String DEVICE_ID = "android-001";
 
     public static final String NOTIFICATION_CHANNEL_ID = "clipboard_sync_channel";
@@ -19,6 +21,8 @@ public final class Config {
 
     private static final String PREFS_NAME = "clipboard_sync_prefs";
     private static final String KEY_DEVICE_ID = "device_id";
+    private static final String KEY_DEVICE_TOKEN = "device_token";
+    private static final String KEY_IS_PAIRED = "is_paired";
 
     private Config() {}
 
@@ -39,5 +43,56 @@ public final class Config {
             prefs.edit().putString(KEY_DEVICE_ID, deviceId).apply();
         }
         return deviceId;
+    }
+
+    /**
+     * Get the stored authentication token, or fallback to device ID in dev mode.
+     */
+    public static synchronized String getDeviceToken(Context context) {
+        if (context == null) {
+            return DEVICE_ID;
+        }
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        String token = prefs.getString(KEY_DEVICE_TOKEN, null);
+        if (token == null || token.trim().isEmpty()) {
+            return getDeviceId(context);
+        }
+        return token;
+    }
+
+    /**
+     * Store the issued authentication credential token.
+     */
+    public static synchronized void setDeviceToken(Context context, String token) {
+        if (context == null) return;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit().putString(KEY_DEVICE_TOKEN, token).apply();
+    }
+
+    /**
+     * Check if this Android device is paired with a desktop account.
+     */
+    public static synchronized boolean isPaired(Context context) {
+        if (context == null) return false;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        return prefs.getBoolean(KEY_IS_PAIRED, false);
+    }
+
+    /**
+     * Set the local device pairing state.
+     */
+    public static synchronized void setPaired(Context context, boolean paired) {
+        if (context == null) return;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit().putBoolean(KEY_IS_PAIRED, paired).apply();
+    }
+
+    /**
+     * Clear pairing state and device token on unpair.
+     */
+    public static synchronized void unpair(Context context) {
+        if (context == null) return;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit().remove(KEY_DEVICE_TOKEN).putBoolean(KEY_IS_PAIRED, false).apply();
     }
 }

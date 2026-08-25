@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from rest_framework import serializers
 
-from clipboard.models import ClipboardEntry
+from clipboard.models import ClipboardEntry, ClipboardState, Device, DeviceCredential, PairingCode
 
 
 class TextOnlyField(serializers.CharField):
@@ -21,3 +23,34 @@ class ClipboardEntrySerializer(serializers.ModelSerializer):
         model = ClipboardEntry
         fields = ("id", "device_id", "content", "created_at")
         read_only_fields = ("id", "created_at")
+
+
+class ClipboardStateSerializer(serializers.ModelSerializer):
+    content = TextOnlyField(allow_blank=False)
+    user_id = serializers.IntegerField(source="user.id", read_only=True)
+    username = serializers.CharField(source="user.username", read_only=True)
+
+    class Meta:
+        model = ClipboardState
+        fields = ("user_id", "username", "content", "updated_at", "expires_at")
+        read_only_fields = ("user_id", "username", "updated_at", "expires_at")
+
+
+class DeviceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Device
+        fields = ("id", "user", "device_id", "device_type", "created_at", "updated_at")
+        read_only_fields = ("id", "created_at", "updated_at")
+
+
+class DeviceCredentialRegisterSerializer(serializers.Serializer):
+    device_id = serializers.CharField(required=True, allow_blank=False)
+
+
+class PairingCodeCreateSerializer(serializers.Serializer):
+    device_id = serializers.CharField(required=True, allow_blank=False)
+
+
+class DevicePairSerializer(serializers.Serializer):
+    code = serializers.CharField(required=True, allow_blank=False)
+    android_device_id = serializers.CharField(required=True, allow_blank=False)

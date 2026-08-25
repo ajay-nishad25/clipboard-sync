@@ -19,6 +19,7 @@ def _make_client(ws_url: str = "ws://127.0.0.1:8000/ws/clipboard/", on_remote_up
     return ClipboardWebSocketClient(
         ws_url=ws_url,
         device_id="desktop-001",
+        credential="desktop-001",
         logger=logger,
         on_remote_update=on_remote_update,
         on_connected=on_connected,
@@ -65,7 +66,7 @@ class ClipboardWebSocketClientSendTests(unittest.TestCase):
             client.send("Hello")
 
         mock_connect.assert_called_once_with(
-            "ws://127.0.0.1:8000/ws/clipboard/?device_id=desktop-001"
+            "ws://127.0.0.1:8000/ws/clipboard/?token=desktop-001&device_id=desktop-001"
         )
         client.close()
 
@@ -149,7 +150,7 @@ class ClipboardWebSocketClientSendTests(unittest.TestCase):
         response_mock.__exit__ = Mock(return_value=None)
 
         with patch("urllib.request.urlopen", return_value=response_mock):
-            content = fetch_latest_clipboard_text("http://127.0.0.1:8000/api/clipboard/latest/")
+            content = fetch_latest_clipboard_text("http://127.0.0.1:8000/api/clipboard/latest/", "devtok_123")
             self.assertEqual(content, "Recovered text")
 
 

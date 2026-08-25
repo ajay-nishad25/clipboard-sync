@@ -19,24 +19,7 @@ import com.clipboard.sync.websocket.ClipboardWebSocketClient;
 
 /**
  * Foreground service that monitors the Android clipboard and forwards new
- * text values to the Django backend using the Phase 5 clipboard.update
- * WebSocket protocol.
- *
- * Android clipboard access restriction (API 29+):
- * On Android 10 and above, apps cannot read clipboard data while in the
- * background unless they hold the focused window. A foreground service has
- * a persistent notification but no focused window, so getPrimaryClip() may
- * return null when the user copies text while our Activity is not visible.
- *
- * Reliable behaviour:
- * - Android < 10 (API 26–28): clipboard read always succeeds.
- * - Android 10+ with Activity visible: clipboard read succeeds because the
- *   app is in focus; the listener in MainActivity delegates to this service.
- * - Android 10+ with Activity not visible: clipboard read from service may
- *   return null; the failure is logged and the value is dropped.
- *
- * This is a known Android privacy restriction and is documented in
- * android-app/README.md as a Phase 6 limitation.
+ * text values to the Django backend using authenticated WebSocket connections.
  */
 public class ClipboardMonitorService extends Service {
 
@@ -80,8 +63,6 @@ public class ClipboardMonitorService extends Service {
                 sendClipboardText(text);
             }
         }
-        // START_STICKY: if the process is killed, Android restarts the service
-        // and re-establishes the WebSocket connection.
         return START_STICKY;
     }
 
@@ -108,6 +89,7 @@ public class ClipboardMonitorService extends Service {
         wsClient = new ClipboardWebSocketClient(
                 Config.WS_BASE_URL,
                 Config.getDeviceId(this),
+                Config.getDeviceToken(this),
                 new ClipboardWebSocketClient.StatusListener() {
 
                     @Override
@@ -186,7 +168,6 @@ public class ClipboardMonitorService extends Service {
 
     private void startForegroundWithType(Notification notification) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // API 29+: pass the foreground service type declared in the manifest.
             startForeground(
                     Config.NOTIFICATION_ID,
                     notification,
@@ -224,14 +205,6 @@ public class ClipboardMonitorService extends Service {
     // IPC: status broadcast to MainActivity
     // ------------------------------------------------------------------
 
-    /**
-     * Broadcast a status update so MainActivity can refresh the UI.
-     *
-     * @param message    Human-readable status string.
-     * @param content    The clipboard content just synced, or null.
-     * @param isAck      True if this broadcast is in response to a send request.
-     * @param isSuccess  True if the send operation succeeded.
-     */
     private void broadcastStatus(String message, @Nullable String content, boolean isAck, boolean isSuccess) {
         Intent intent = new Intent(ACTION_STATUS_UPDATE);
         intent.setPackage(getPackageName());

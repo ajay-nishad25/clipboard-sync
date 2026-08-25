@@ -1,81 +1,69 @@
 # Android Clipboard Sync App
 
-Phase 6 Java Android application that implements **Manual Android Clipboard Synchronization**
-compatible with Android 10+ / Android 14 restrictions.
+Java Android application implementing **Manual Android Clipboard Synchronization** and **Desktop Device Pairing** with **Authenticated Device Credentials** compatible with Android 10+ / Android 14 (API 34) restrictions.
 
-## Architecture
+---
 
+## Current Verified Baseline (Phases 1–9C Implemented)
+
+### Architecture Diagram
 ```text
                                  ANDROID APP
                                       │
-           ┌──────────────────────────┴──────────────────────────┐
-           │                                                     │
-           ▼                                                     ▼
-    [SEND CLIPBOARD]                                     [RECEIVE CLIPBOARD]
-           │                                                     │
-           ▼                                                     ▼
- cm.getPrimaryClip()                                GET /api/clipboard/latest/
- (MainActivity Focused)                                          │
-           │                                                     ▼
-           ▼                                            HTTP JSON Response
-ClipboardWebSocketClient                                         │
- (ws://127.0.0.1:8000)                                           ▼
-           │                                            cm.setPrimaryClip()
-           ▼ (clipboard.update)                                  │
-    Django Backend                                               ▼
-           │                                             Android Clipboard
-           ▼ (clipboard.ack)
- "Clipboard sent successfully"
+           ┌──────────────────────────┼──────────────────────────┐
+           │                          │                          │
+           ▼                          ▼                          ▼
+     [ PAIR DEVICE ]          [SEND CLIPBOARD]           [RECEIVE CLIPBOARD]
+           │                          │                          │
+           ▼                          ▼                          ▼
+  POST /api/device/pair/     cm.getPrimaryClip()        GET /api/clipboard/latest/
+  (Code: AB7K-29XM)          (MainActivity Focused)     Header: Bearer <device_token>
+           │                          │                          │
+           ▼                          ▼                          ▼
+  Receives device_token     ClipboardWebSocketClient    HTTP JSON Response
+  SharedPreferences saved     (?token=<device_token>)             │
+                              (clipboard.update)                 ▼
+                                                         cm.setPrimaryClip()
 ```
 
-## Build & Test
-
+### Build & Test
 ```powershell
 cd android-app
-# Run unit tests
-.\gradlew.bat test
-
-# Build debug APK
-.\gradlew.bat assembleDebug
+.\gradlew.bat test            # Run unit tests (ClipboardApiClientTest, ConfigTest) - 12 tests
+.\gradlew.bat assembleDebug   # Build debug APK
 ```
 
-The APK is placed at: `app/build.gradle` → `app/build/outputs/apk/debug/app-debug.apk`
+### Physical Device USB Setup
+```powershell
+adb reverse tcp:8000 tcp:8000
+.\gradlew.bat installDebug
+```
 
-## Physical Device Setup (USB Debugging)
+---
 
-1. Connect your physical Android device (e.g. Realme Android 14) via USB with USB Debugging enabled.
-2. Enable port forwarding:
-   ```powershell
-   adb reverse tcp:8000 tcp:8000
-   ```
-3. Install the debug APK:
-   ```powershell
-   .\gradlew.bat installDebug
-   ```
+## Mandatory Architectural Rules (MUST NOT BE CHANGED)
 
-## User Workflows
+1. **Manual Clipboard Workflows Only**:
+   - `[ SEND CLIPBOARD ]`: Reads system clipboard in user-focused `MainActivity` and sends over authenticated WebSocket (`?token=<device_token>`).
+   - `[ RECEIVE CLIPBOARD ]`: Fetches latest entry via HTTP REST (`GET /api/clipboard/latest/` with `Authorization: Bearer <device_token>`) and applies to Android clipboard via `setPrimaryClip()`.
+2. **Desktop Device Pairing UI & Credential Persistence**:
+   - Enter 8-character pairing code (e.g. `AB7K-29XM`) and tap `[ PAIR DEVICE ]`.
+   - Calls `POST /api/device/pair/` to associate Android Device ID with Desktop's owner User account and obtain issued `device_token` secret.
+   - Stores pairing state and `device_token` in `SharedPreferences`.
+3. **No Background Clipboard Harvesting**:
+   - `ClipboardMonitorService` manages background WebSocket lifecycle only.
+   - It does **not** call `getPrimaryClip()` while running in the background, in compliance with Android 10+ privacy restrictions.
 
-### 1. SEND CLIPBOARD
-1. Open **Clipboard Sync** app on Android → tap **START** to establish WebSocket connection.
-2. Copy any text in Chrome, WhatsApp, Notes, etc.
-3. Return to **Clipboard Sync** app.
-4. Tap **`SEND CLIPBOARD`**.
-5. `MainActivity` reads the clipboard while focused, dispatches text over WebSocket (`clipboard.update`), waits for `clipboard.ack` from Django, and displays:
-   `"Clipboard sent successfully"`
+---
 
-### 2. RECEIVE CLIPBOARD
-1. Ensure desktop agent has sent text to Django (or an entry exists in backend DB).
-2. Open **Clipboard Sync** app on Android.
-3. Tap **`RECEIVE CLIPBOARD`**.
-4. Android fetches the latest entry via `GET http://127.0.0.1:8000/api/clipboard/latest/`, writes it to Android clipboard using `setPrimaryClip()`, and displays:
-   `"Clipboard received successfully"`
-5. Paste into any Android application.
+## Persistent Device ID & Token
 
-## Permissions
+- Auto-generates a persistent device UUID (`android-<uuid>`) and stores issued `device_token` secret in Android `SharedPreferences` (`clipboard_sync_prefs`).
+- Reused across app restarts; reset only upon app re-install or explicit unpair.
 
-| Permission | Purpose |
-|---|---|
-| `INTERNET` | WebSocket connection & REST HTTP requests to Django backend |
-| `FOREGROUND_SERVICE` | Maintain background WebSocket connection |
-| `FOREGROUND_SERVICE_DATA_SYNC` | API 34+: foreground service type for data sync |
-| `POST_NOTIFICATIONS` | API 33+: show service notification |
+---
+
+## Phase 9 Remaining Roadmap (PLANNED / NEXT)
+
+- **Phase 9D**: Configurable production transport endpoints (`https://` and `wss://`).
+- **Phase 9E**: Deployment hardening.

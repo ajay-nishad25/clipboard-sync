@@ -1,14 +1,12 @@
 # Clipboard Sync Backend
 
-Phase 5 makes `clipboard.update` a first-class WebSocket message. The desktop
-agent sends clipboard changes over WebSocket; Django validates, stores, and
-acknowledges them. The REST API from Phases 2–3 remains intact.
+Django REST Framework and Django Channels backend for clipboard synchronization.
 
 ## Prerequisites
 
 - Python 3.11 or later
 
-## Environment setup
+## Environment Setup (Development Baseline)
 
 From `backend/` in PowerShell:
 
@@ -23,113 +21,53 @@ Set a local Django development secret:
 $env:DJANGO_SECRET_KEY = "choose-a-long-unique-local-development-value"
 ```
 
-## Install dependencies
+Install dependencies:
 
 ```powershell
 python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-`pyproject.toml` declares `Django`, `djangorestframework`, `channels`, and
-`daphne`. All are installed by the command above.
-
-## Database migrations
+Database migrations & start dev server:
 
 ```powershell
 python manage.py migrate
+python manage.py runserver     # Daphne serves HTTP + WebSocket on http://127.0.0.1:8000/
 ```
 
-## Start the development server
+---
 
-```powershell
-python manage.py runserver
-```
+## Current Verified Endpoints (Phases 1–9C Implemented)
 
-Daphne (listed first in `INSTALLED_APPS`) takes over `runserver` and handles
-both HTTP and WebSocket connections on `http://127.0.0.1:8000/`.
+### HTTP REST API
+- `POST /api/clipboard/` — Store a clipboard entry (requires `Authorization: Bearer <device_token>`).
+- `GET /api/clipboard/latest/` — Retrieve newest, non-expired `ClipboardState` belonging to caller's authenticated User (requires `Authorization: Bearer <device_token>`).
+- `POST /api/device/credential/register/` — Register desktop device and obtain device authentication token.
+- `POST /api/device/pairing/create/` — Generate temporary 8-character desktop pairing code (e.g. `AB7K-29XM`, 5-min expiration).
+- `POST /api/device/pair/` — Pair Android device with Desktop's owner User account using a pairing code; returns issued device credential token.
+- `POST /api/device/unpair/` — Revoke device credential token.
 
-## REST API
-
-### Create an entry
-
-`POST /api/clipboard/`
-
-```json
-{"device_id": "desktop-001", "content": "Hello World"}
-```
-
-Returns `201 Created`. Used for regression testing; in normal Phase 5 operation
-the desktop agent uses WebSocket instead.
-
-### Get the latest entry
-
-`GET /api/clipboard/latest/`
-
-Returns `200 OK` with the latest entry, or `404 Not Found`.
-
-## WebSocket endpoint
-
+### WebSocket Endpoint
 ```text
-ws://127.0.0.1:8000/ws/clipboard/
-ws://127.0.0.1:8000/ws/clipboard/?device_id=desktop-001
+ws://127.0.0.1:8000/ws/clipboard/?token=<device_token>&device_id=<device_id>
 ```
 
-### Supported messages
+#### Supported Messages
+- `test.message`: Connectivity test (`test.ack`).
+- `clipboard.update`: Client outbound clipboard update (`clipboard.ack`).
+- `clipboard.remote_update`: Server-side broadcast to user-scoped channel group (`clipboard_user_<user_id>`).
 
-#### `test.message` (Phase 4 — still supported)
-
-Send: `{"type": "test.message", "message": "Hello WebSocket"}`
-Receive: `{"type": "test.ack", "message": "Hello WebSocket"}`
-
-#### `clipboard.update` (Phase 5)
-
-Send:
-
-```json
-{"type": "clipboard.update", "device_id": "desktop-001", "content": "Hello from Windows"}
-```
-
-Receive on success:
-
-```json
-{"type": "clipboard.ack", "device_id": "desktop-001", "status": "stored"}
-```
-
-### Error responses
-
-```json
-{"type": "error", "code": "<code>", "detail": "<detail>"}
-```
-
-| Situation | `code` |
-|-----------|--------|
-| Non-JSON text | `invalid_json` |
-| Not a JSON object | `invalid_message` |
-| Unsupported `type` | `unsupported_type` |
-| Missing/non-string `message` (test.message) | `invalid_message` |
-| Missing/non-string `device_id` (clipboard.update) | `invalid_message` |
-| Empty or non-string `content` | `invalid_content` |
-
-## Tests
-
+### Automated Verification (30 tests)
 ```powershell
+python manage.py check
+python manage.py makemigrations --check
 python manage.py test
 ```
+Expected: **30 tests**, all passing (`OK`).
 
-Expected: **15 tests**, all passing (5 REST, 5 WebSocket infrastructure, 5
-clipboard.update).
+---
 
-## WebSocket smoke test
+## Phase 9 Remaining Roadmap (PLANNED / NEXT)
 
-Start the dev server, then in a second terminal:
-
-```powershell
-python scripts/websocket_smoke_test.py
-```
-
-Override the URL if port 8000 is occupied:
-
-```powershell
-$env:WEBSOCKET_SMOKE_URL = "ws://127.0.0.1:8001/ws/clipboard/?device_id=desktop-001"
-python scripts/websocket_smoke_test.py
-```
+- **Phase 9D**: Production Configuration & HTTPS/WSS (TLS certificate validation).
+- **Phase 9E**: PostgreSQL, Redis Channel Layer, and deployment hardening.
