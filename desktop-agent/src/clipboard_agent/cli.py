@@ -66,6 +66,30 @@ def fetch_latest_clipboard_text(rest_latest_url: str, timeout_seconds: float = 5
     return None
 
 
+def request_pairing_code(pairing_url: str, device_id: str, timeout_seconds: float = 5.0) -> dict | None:
+    """Request a temporary pairing code from the backend."""
+    try:
+        data = json.dumps({"device_id": device_id}).encode("utf-8")
+        request = urllib.request.Request(
+            pairing_url,
+            data=data,
+            headers={
+                "User-Agent": "ClipboardDesktopAgent/1.0",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            if response.status in (200, 201):
+                payload = json.loads(response.read().decode("utf-8"))
+                if isinstance(payload, dict) and "code" in payload:
+                    return payload
+    except Exception:
+        pass
+    return None
+
+
 def main() -> None:
     """Run the local clipboard monitoring loop."""
     arguments = parse_arguments()
@@ -77,6 +101,18 @@ def main() -> None:
         return
 
     logger.info("Using device ID: %s", config.device_id)
+
+    # Request and display a pairing code for Android enrollment
+    if config.pairing_url:
+        pairing_info = request_pairing_code(config.pairing_url, config.device_id, config.timeout_seconds)
+        if pairing_info and "code" in pairing_info:
+            print("\n==================================================")
+            print("Clipboard Sync Desktop Agent")
+            print("==================================================")
+            print("Pair your Android device using this code:\n")
+            print(f"        {pairing_info['code']}\n")
+            print("Code expires in 5 minutes.")
+            print("==================================================\n")
 
     monitor: ClipboardMonitor | None = None
 

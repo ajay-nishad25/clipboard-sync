@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
@@ -37,7 +38,7 @@ public class ClipboardApiClientTest {
                             .request(chain.request())
                             .protocol(Protocol.HTTP_1_1)
                             .code(code)
-                            .message(code == 200 ? "OK" : (code == 404 ? "Not Found" : "Error"))
+                            .message(code == 200 ? "OK" : (code == 404 ? "Not Found" : (code == 409 ? "Conflict" : "Error")))
                             .body(body)
                             .build();
                 })
@@ -173,5 +174,83 @@ public class ClipboardApiClientTest {
 
         assertTrue(latch.await(5, TimeUnit.SECONDS));
         assertEquals("Clipboard entry content is empty.", errorRef.get());
+    }
+
+    @Test
+    public void testPairDeviceSuccess() throws Exception {
+        OkHttpClient client = createMockHttpClient(200, "{\"status\":\"paired\",\"device_id\":\"android-100\",\"user_id\":42}", null);
+        ClipboardApiClient apiClient = new ClipboardApiClient(client);
+
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicReference<String> statusRef = new AtomicReference<>();
+        final AtomicInteger userIdRef = new AtomicInteger();
+
+        apiClient.pairDevice("http://localhost/api/device/pair/", "AB7K-29XM", "android-100", new ClipboardApiClient.PairCallback() {
+            @Override
+            public void onSuccess(String status, int userId) {
+                statusRef.set(status);
+                userIdRef.set(userId);
+                latch.countDown();
+            }
+
+            @Override
+            public void onError(int statusCode, String errorMessage) {}
+        });
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS));
+        assertEquals("paired", statusRef.get());
+        assertEquals(42, userIdRef.get());
+    }
+
+    @Test
+    public void testPairDeviceInvalidCodeError() throws Exception {
+        OkHttpClient client = createMockHttpClient(400, "{\"detail\":\"Invalid or unknown pairing code.\"}", null);
+        ClipboardApiClient apiClient = new ClipboardApiClient(client);
+
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicInteger codeRef = new AtomicInteger();
+        final AtomicReference<String> msgRef = new AtomicReference<>();
+
+        apiClient.pairDevice("http://localhost/api/device/pair/", "INVALID", "android-100", new ClipboardApiClient.PairCallback() {
+            @Override
+            public void onSuccess(String status, int userId) {}
+
+            @Override
+            public void onError(int statusCode, String errorMessage) {
+                codeRef.set(statusCode);
+                msgRef.set(errorMessage);
+                latch.countDown();
+            }
+        });
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS));
+        assertEquals(400, codeRef.get());
+        assertEquals("Invalid or unknown pairing code.", msgRef.get());
+    }
+
+    @Test
+    public void testPairDeviceConflictError() throws Exception {
+        OkHttpClient client = createMockHttpClient(409, "{\"detail\":\"Device is already paired with another user account.\"}", null);
+        ClipboardApiClient apiClient = new ClipboardApiClient(client);
+
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicInteger codeRef = new AtomicInteger();
+        final AtomicReference<String> msgRef = new AtomicReference<>();
+
+        apiClient.pairDevice("http://localhost/api/device/pair/", "AB7K-29XM", "android-100", new ClipboardApiClient.PairCallback() {
+            @Override
+            public void onSuccess(String status, int userId) {}
+
+            @Override
+            public void onError(int statusCode, String errorMessage) {
+                codeRef.set(statusCode);
+                msgRef.set(errorMessage);
+                latch.countDown();
+            }
+        });
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS));
+        assertEquals(409, codeRef.get());
+        assertEquals("Device is already paired with another user account.", msgRef.get());
     }
 }

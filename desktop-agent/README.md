@@ -30,6 +30,7 @@ All variables are optional; defaults shown below:
 |----------|---------|---------|
 | `CLIPBOARD_WS_URL` | `ws://127.0.0.1:8000/ws/clipboard/` | WebSocket endpoint |
 | `CLIPBOARD_REST_LATEST_URL` | `http://127.0.0.1:8000/api/clipboard/latest/` | HTTP REST catch-up endpoint |
+| `CLIPBOARD_PAIRING_URL` | `http://127.0.0.1:8000/api/device/pairing/create/` | HTTP REST pairing code endpoint |
 | `CLIPBOARD_DEVICE_ID` | `~/.clipboard_sync/device_id.txt` | Auto-generated persistent `desktop-<uuid>` ID |
 | `CLIPBOARD_API_TIMEOUT_SECONDS` | `5` | Request timeout in seconds |
 
@@ -44,12 +45,13 @@ clipboard-agent --interval 1.0
 ```powershell
 python -m unittest discover -s tests -v
 ```
-Expected: **43 tests**, all passing.
+Expected: **45 tests**, all passing.
 
 ---
 
-## Verified Baseline Features (Phases 1–8)
+## Verified Baseline Features (Phases 1–9B Implemented)
 
+- **Pairing Code Banner**: On launch, requests an 8-character pairing code (`AB7K-29XM`, 5-min expiration) from `POST /api/device/pairing/create/` and displays a terminal banner for Android pairing.
 - **Real-Time Outbound Sync**: Monitors Windows clipboard and sends new text via `clipboard.update` over WebSocket.
 - **Remote Update Inbound Listener**: Receives `clipboard.remote_update` from Django, updates Windows clipboard via `pyperclip.copy()`, and suppresses feedback loops via `monitor.set_last_content()`.
 - **Startup / Reconnect Catch-Up**: On connection establishment, fetches `GET /api/clipboard/latest/` to recover missed clipboard updates.
@@ -57,15 +59,6 @@ Expected: **43 tests**, all passing.
 
 ---
 
-## Phase 9 Desktop Agent Roadmap (PLANNED / NEXT)
+## Phase 9 Remaining Roadmap (PLANNED / NEXT)
 
-Phase 9 integrates Desktop Agent into the multi-user architecture:
-
-1. **Device Pairing Code Generation**:
-   - On initial launch or un-paired state, the agent displays a 8-character pairing code (e.g. `AB7K-29XM`) for Android enrollment.
-2. **Persistent Device Credential**:
-   - After pairing completes, the agent receives and stores a secure device authentication token locally (`~/.clipboard_sync/token.txt`).
-3. **Authenticated Transport**:
-   - Connects using production WSS endpoints (`wss://api.example.com/ws/clipboard/?token=<device_token>`).
-4. **Loop Prevention & Catch-Up**:
-   - Retains existing `set_last_content()` feedback loop suppression and startup HTTP catch-up.
+- **Phase 9C**: Persistent device authentication tokens (`token.txt`) and authenticated WebSocket handshake (`wss://`).

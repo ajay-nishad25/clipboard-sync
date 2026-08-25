@@ -1,39 +1,34 @@
 # Android Clipboard Sync App
 
-Java Android application implementing **Manual Android Clipboard Synchronization** compatible with Android 10+ / Android 14 (API 34) restrictions.
+Java Android application implementing **Manual Android Clipboard Synchronization** and **Desktop Device Pairing** compatible with Android 10+ / Android 14 (API 34) restrictions.
 
 ---
 
-## Current Verified Baseline (Phases 1–8)
+## Current Verified Baseline (Phases 1–9B Implemented)
 
 ### Architecture Diagram
 ```text
                                  ANDROID APP
                                       │
-           ┌──────────────────────────┴──────────────────────────┐
-           │                                                     │
-           ▼                                                     ▼
-    [SEND CLIPBOARD]                                     [RECEIVE CLIPBOARD]
-           │                                                     │
-           ▼                                                     ▼
- cm.getPrimaryClip()                                GET /api/clipboard/latest/
- (MainActivity Focused)                                          │
-           │                                                     ▼
-           ▼                                            HTTP JSON Response
-ClipboardWebSocketClient                                         │
- (ws://127.0.0.1:8000)                                           ▼
-           │                                            cm.setPrimaryClip()
-           ▼ (clipboard.update)                                  │
-    Django Backend                                               ▼
-           │                                             Android Clipboard
-           ▼ (clipboard.ack)
- "Clipboard sent successfully"
+           ┌──────────────────────────┼──────────────────────────┐
+           │                          │                          │
+           ▼                          ▼                          ▼
+     [ PAIR DEVICE ]          [SEND CLIPBOARD]           [RECEIVE CLIPBOARD]
+           │                          │                          │
+           ▼                          ▼                          ▼
+  POST /api/device/pair/     cm.getPrimaryClip()        GET /api/clipboard/latest/?device_id=...
+  (Code: AB7K-29XM)          (MainActivity Focused)                  │
+           │                          │                          ▼
+           ▼                          ▼                 HTTP JSON Response
+  Paired with User A        ClipboardWebSocketClient                 │
+  SharedPreferences saved     (ws://127.0.0.1:8000)                   ▼
+                              (clipboard.update)         cm.setPrimaryClip()
 ```
 
 ### Build & Test
 ```powershell
 cd android-app
-.\gradlew.bat test            # Run unit tests (ClipboardApiClientTest, ConfigTest)
+.\gradlew.bat test            # Run unit tests (ClipboardApiClientTest, ConfigTest) - 12 tests
 .\gradlew.bat assembleDebug   # Build debug APK
 ```
 
@@ -49,33 +44,24 @@ adb reverse tcp:8000 tcp:8000
 
 1. **Manual Clipboard Workflows Only**:
    - `[ SEND CLIPBOARD ]`: Reads system clipboard in user-focused `MainActivity` and sends over WebSocket.
-   - `[ RECEIVE CLIPBOARD ]`: Fetches latest entry via HTTP REST (`GET /api/clipboard/latest/`) and applies to Android clipboard via `setPrimaryClip()`.
-2. **No Background Clipboard Harvesting**:
+   - `[ RECEIVE CLIPBOARD ]`: Fetches latest entry via HTTP REST (`GET /api/clipboard/latest/?device_id=...`) and applies to Android clipboard via `setPrimaryClip()`.
+2. **Desktop Device Pairing UI**:
+   - Section in `MainActivity`: Enter 8-character pairing code (e.g. `AB7K-29XM`) and tap `[ PAIR DEVICE ]`.
+   - Calls `POST /api/device/pair/` to associate Android Device ID with Desktop's owner User account.
+   - Stores pairing state in `SharedPreferences`.
+3. **No Background Clipboard Harvesting**:
    - `ClipboardMonitorService` manages background WebSocket lifecycle only.
    - It does **not** call `getPrimaryClip()` while running in the background, in compliance with Android 10+ privacy restrictions.
 
 ---
 
-## Persistent Device ID
+## Persistent Device ID & Pairing State
 
 - Auto-generates a persistent device UUID (`android-<uuid>`) saved in Android `SharedPreferences` (`clipboard_sync_prefs`).
 - Reused across app restarts; reset only upon app re-install or clear data.
 
 ---
 
-## Phase 9 Android Roadmap (PLANNED / NEXT)
+## Phase 9 Remaining Roadmap (PLANNED / NEXT)
 
-Phase 9 adds device pairing and user authentication to the Android application:
-
-1. **Pairing Screen UI**:
-   - User inputs the pairing code displayed by Desktop Agent (e.g. `AB7K-29XM`).
-   - Taps **`[ PAIR DEVICE ]`**.
-2. **Device Enrollment**:
-   - App calls `POST /api/device/pair/` with pairing code and device ID.
-   - Backend returns user association and persistent device token.
-   - Device token saved securely in Android `SharedPreferences`.
-3. **Authenticated Communication**:
-   - WebSocket connection includes device token (`wss://api.example.com/ws/clipboard/?token=<device_token>`).
-   - `[ RECEIVE CLIPBOARD ]` sends `Authorization: Bearer <device_token>` header.
-4. **Data Isolation Guarantee**:
-   - Android A sends/receives clipboard data restricted strictly to User A's channel scope (`clipboard_user_A`).
+- **Phase 9C**: Persistent Device Tokens and Authenticated Transport (`wss://` and Bearer REST headers).

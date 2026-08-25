@@ -10,6 +10,7 @@ from typing import Mapping
 
 DEFAULT_API_URL = "http://127.0.0.1:8000/api/clipboard/"
 DEFAULT_REST_LATEST_URL = "http://127.0.0.1:8000/api/clipboard/latest/"
+DEFAULT_PAIRING_URL = "http://127.0.0.1:8000/api/device/pairing/create/"
 DEFAULT_WS_URL = "ws://127.0.0.1:8000/ws/clipboard/"
 DEFAULT_TIMEOUT_SECONDS = 5.0
 
@@ -20,6 +21,7 @@ class AgentConfig:
 
     api_url: str
     rest_latest_url: str
+    pairing_url: str
     ws_url: str
     device_id: str
     timeout_seconds: float
@@ -57,12 +59,15 @@ def load_config(
     source = os.environ if environ is None else environ
     api_url = source.get("CLIPBOARD_API_URL", DEFAULT_API_URL).strip()
     rest_latest_url = source.get("CLIPBOARD_REST_LATEST_URL", DEFAULT_REST_LATEST_URL).strip()
+    pairing_url = source.get("CLIPBOARD_PAIRING_URL", DEFAULT_PAIRING_URL).strip()
     ws_url = source.get("CLIPBOARD_WS_URL", DEFAULT_WS_URL).strip()
 
     if not api_url:
         raise ValueError("CLIPBOARD_API_URL must not be empty")
     if not rest_latest_url:
         raise ValueError("CLIPBOARD_REST_LATEST_URL must not be empty")
+    if not pairing_url:
+        raise ValueError("CLIPBOARD_PAIRING_URL must not be empty")
     if not ws_url:
         raise ValueError("CLIPBOARD_WS_URL must not be empty")
 
@@ -86,6 +91,7 @@ def load_config(
     return AgentConfig(
         api_url=api_url,
         rest_latest_url=rest_latest_url,
+        pairing_url=pairing_url,
         ws_url=ws_url,
         device_id=device_id,
         timeout_seconds=timeout_seconds,

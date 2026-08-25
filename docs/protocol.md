@@ -1,12 +1,22 @@
 # Protocol Notes
 
-## Verified Baseline Protocol (Phases 1–8)
+## Verified Baseline Protocol (Phases 1–9B)
 
 ### HTTP API
 - `POST /api/clipboard/` — Store a clipboard entry (regression testing).
-- `GET /api/clipboard/latest/` — Return the most recently created clipboard entry.
+- `GET /api/clipboard/latest/?device_id=<id>` — Return the active, non-expired `ClipboardState` belonging to caller device's User owner account.
+- `POST /api/device/pairing/create/` — Request a temporary 8-character pairing code for a desktop device (expires in 5 minutes).
+  - Request: `{"device_id": "desktop-4f2a91c8"}`
+  - Response (201 Created): `{"code": "AB7K-29XM", "expires_at": "2026-08-25T18:05:00Z"}`
+- `POST /api/device/pair/` — Pair an Android device with a Desktop owner User account using a pairing code.
+  - Request: `{"code": "AB7K-29XM", "android_device_id": "android-b17f39a0"}`
+  - Response (200 OK): `{"status": "paired", "device_id": "android-b17f39a0", "user_id": 123, "user_name": "user_desktop-4f2a91c8"}`
+  - Errors:
+    - 400 Bad Request: `"Pairing code has expired."` / `"Pairing code has already been used."`
+    - 404 Not Found: `"Invalid or unknown pairing code."`
+    - 409 Conflict: `"Device is already paired with another user account."`
 
-### WebSocket Endpoint (Phases 4–8)
+### WebSocket Endpoint
 
 ```text
 ws://127.0.0.1:8000/ws/clipboard/?device_id=<id>
@@ -22,8 +32,9 @@ ws://127.0.0.1:8000/ws/clipboard/?device_id=<id>
    - Send: `{"type": "clipboard.update", "device_id": "desktop-4f2a91c8", "content": "Hello World"}`
    - Receive (Sender ACK): `{"type": "clipboard.ack", "device_id": "desktop-4f2a91c8", "status": "stored"}`
 
-3. **`clipboard.remote_update`** (Phase 7 — Server Inbound Remote Broadcast):
-   - Server → Client Receive: `{"type": "clipboard.remote_update", "device_id": "android-b17f39a0", "content": "Hello from Android"}`
+3. **`clipboard.remote_update`** (Phases 7–9B — Server Inbound User-Scoped Remote Broadcast):
+   - Server $\rightarrow$ Client Receive: `{"type": "clipboard.remote_update", "device_id": "android-b17f39a0", "content": "Hello from Android"}`
+   - Note: Broadcasts are routed **only** to devices belonging to the sender's User channel group (`clipboard_user_<user_id>`).
 
 #### Error Responses (Baseline)
 ```json
@@ -33,11 +44,11 @@ Codes: `invalid_json`, `invalid_message`, `unsupported_type`, `invalid_content`.
 
 ---
 
-## Phase 9 Protocol Roadmap (PLANNED / NEXT)
+## Phase 9 Remaining Roadmap (PLANNED / NEXT)
 
-Phase 9 upgrades transport and framing to enforce **User Identity**, **Device Pairing**, and **Authentication**.
+Phase 9C–9E upgrades transport and framing to enforce persistent **Device Tokens**, **HTTPS/WSS**, and **Production Deployment**.
 
-### 1. Authenticated Transport & Connection
+### 1. Authenticated Transport & Connection (Phase 9C)
 
 ```text
 wss://api.example.com/ws/clipboard/?token=<device_token>
@@ -48,53 +59,7 @@ wss://api.example.com/ws/clipboard/?token=<device_token>
 
 ---
 
-### 2. Device Pairing Endpoint
-
-```text
-POST /api/device/pair/
-```
-
-- **Request**:
-  ```json
-  {
-    "device_id": "android-b17f39a0",
-    "pairing_code": "AB7K-29XM"
-  }
-  ```
-- **Response (200 OK)**:
-  ```json
-  {
-    "status": "paired",
-    "user_id": "user_12345",
-    "device_token": "devtok_9876543210abcdef"
-  }
-  ```
-- **Error (400 Bad Request / 401 Unauthorized)**:
-  ```json
-  {
-    "error": "invalid_pairing_code",
-    "detail": "Pairing code expired or invalid."
-  }
-  ```
-
----
-
-### 3. User-Scoped WebSocket Broadcast
-
-- Inbound `clipboard.remote_update` messages are routed **only** to connections belonging to the authenticated `User` (`clipboard_user_<USER_ID>`).
-- Payload contains sender device metadata:
-  ```json
-  {
-    "type": "clipboard.remote_update",
-    "sender_device_id": "android-b17f39a0",
-    "content": "Authenticated user text",
-    "timestamp": "2026-08-25T18:00:00Z"
-  }
-  ```
-
----
-
-### 4. Authenticated REST API & 10-Minute Expiration
+### 2. User-Scoped Authenticated REST API (Phase 9C)
 
 ```text
 GET /api/clipboard/latest/
@@ -110,4 +75,4 @@ Header: Authorization: Bearer <device_token>
   }
   ```
 - **Expired Entry Response (404 Not Found)**:
-  - If `now > expires_at` (older than 10 minutes), the server returns `404 Not Found` (`"Clipboard entry expired"`).
+  - If `now > expires_at` (older than 10 minutes), the server returns `404 Not Found` (`"No clipboard entries found."`).

@@ -6,9 +6,11 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from clipboard.models import ClipboardEntry, ClipboardState, Device, DeviceType
+from clipboard.models import ClipboardEntry, ClipboardState, Device, DeviceType, PairingCode
 from clipboard.services import (
+    create_pairing_code,
     get_active_user_clipboard,
+    pair_android_device,
     resolve_device_and_user,
     set_user_clipboard,
 )
@@ -109,6 +111,179 @@ class ClipboardStateTests(TestCase):
         self.assertEqual(state_a.content, "User A Secret")
         self.assertEqual(state_b.content, "User B Secret")
         self.assertNotEqual(state_a.content, state_b.content)
+
+
+class PairingCodeTests(TestCase):
+    def setUp(self) -> None:
+        self.user_a = User.objects.create_user("pair_user_a")
+        self.desktop_a = Device.objects.create(
+            user=self.user_a, device_id="desktop-A", device_type=DeviceType.DESKTOP
+        )
+        self.user_b = User.objects.create_user("pair_user_b")
+        self.desktop_b = Device.objects.create(
+            user=self.user_b, device_id="desktop-B", device_type=DeviceType.DESKTOP
+        )
+
+    def test_pairing_code_generated(self) -> None:
+        pairing_code = create_pairing_code(self.desktop_a)
+        self.assertIsNotNone(pairing_code)
+        self.assertEqual(pairing_code.desktop_device, self.desktop_a)
+        self.assertFalse(pairing_code.is_used)
+
+    def test_pairing_code_correct_format(self) -> None:
+        pairing_code = create_pairing_code(self.desktop_a)
+        self.assertEqual(len(pairing_code.code), 9)  # 4 chars + '-' + 4 chars
+        self.assertIn("-", pairing_code.code)
+        parts = pairing_code.code.split("-")
+        self.assertEqual(len(parts[0]), 4)
+        self.assertEqual(len(parts[1]), 4)
+        self.assertTrue(parts[0].isalnum() and parts[0].isupper())
+        self.assertTrue(parts[1].isalnum() and parts[1].isupper())
+
+    def test_expiration_timestamp_created(self) -> None:
+        before = timezone.now()
+        pairing_code = create_pairing_code(self.desktop_a, ttl_minutes=5)
+        after = timezone.now()
+
+        self.assertTrue(before + timedelta(minutes=5) <= pairing_code.expires_at <= after + timedelta(minutes=5))
+
+    def test_expired_code_rejected(self) -> None:
+        pairing_code = create_pairing_code(self.desktop_a)
+        pairing_code.expires_at = timezone.now() - timedelta(seconds=1)
+        pairing_code.save()
+
+        device, error = pair_android_device(pairing_code.code, "android-new")
+        self.assertIsNone(device)
+        self.assertEqual(error, "Pairing code has expired.")
+
+    def test_used_code_rejected(self) -> None:
+        pairing_code = create_pairing_code(self.desktop_a)
+        pairing_code.is_used = True
+        pairing_code.save()
+
+        device, error = pair_android_device(pairing_code.code, "android-new")
+        self.assertIsNone(device)
+        self.assertEqual(error, "Pairing code has already been used.")
+
+    def test_unknown_code_rejected(self) -> None:
+        device, error = pair_android_device("INVALID-CODE", "android-new")
+        self.assertIsNone(device)
+        self.assertEqual(error, "Invalid or unknown pairing code.")
+
+    def test_code_cannot_be_reused(self) -> None:
+        pairing_code = create_pairing_code(self.desktop_a)
+        dev1, err1 = pair_android_device(pairing_code.code, "android-001")
+        self.assertIsNotNone(dev1)
+        self.assertIsNone(err1)
+
+        dev2, err2 = pair_android_device(pairing_code.code, "android-002")
+        self.assertIsNone(dev2)
+        self.assertEqual(err2, "Pairing code has already been used.")
+
+    def test_android_successfully_pairs_with_desktop(self) -> None:
+        pairing_code = create_pairing_code(self.desktop_a)
+        android_device, error = pair_android_device(pairing_code.code, "android-A")
+        self.assertIsNotNone(android_device)
+        self.assertIsNone(error)
+        self.assertEqual(android_device.device_id, "android-A")
+
+    def test_android_becomes_associated_with_desktop_user(self) -> None:
+        pairing_code = create_pairing_code(self.desktop_a)
+        android_device, _ = pair_android_device(pairing_code.code, "android-A")
+        self.assertEqual(android_device.user, self.user_a)
+
+    def test_already_paired_android_cannot_silently_move_to_another_user(self) -> None:
+        # Pair android-A to User A
+        code_a = create_pairing_code(self.desktop_a)
+        pair_android_device(code_a.code, "android-A")
+
+        # Try pairing android-A to User B using User B's pairing code
+        code_b = create_pairing_code(self.desktop_b)
+        device, error = pair_android_device(code_b.code, "android-A")
+        self.assertIsNone(device)
+        self.assertEqual(error, "Device is already paired with another user account.")
+
+    def test_wrong_device_type_cannot_create_valid_pairing(self) -> None:
+        android_dev = Device.objects.create(
+            user=self.user_a, device_id="android-wrong", device_type=DeviceType.ANDROID
+        )
+        with self.assertRaises(ValueError):
+            create_pairing_code(android_dev)
+
+    def test_pairing_code_belongs_to_correct_desktop_owner(self) -> None:
+        code_a = create_pairing_code(self.desktop_a)
+        code_b = create_pairing_code(self.desktop_b)
+
+        self.assertEqual(code_a.desktop_device.user, self.user_a)
+        self.assertEqual(code_b.desktop_device.user, self.user_b)
+
+
+class PairingApiTests(TestCase):
+    def setUp(self) -> None:
+        self.client = APIClient()
+        self.user_a = User.objects.create_user("api_pair_user_a")
+        self.desktop_a = Device.objects.create(
+            user=self.user_a, device_id="desktop-A", device_type=DeviceType.DESKTOP
+        )
+
+    def test_valid_pairing_returns_expected_response(self) -> None:
+        # 1. Create code
+        create_resp = self.client.post(
+            "/api/device/pairing/create/",
+            {"device_id": "desktop-A"},
+            format="json",
+        )
+        self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
+        code = create_resp.data["code"]
+
+        # 2. Pair android device
+        pair_resp = self.client.post(
+            "/api/device/pair/",
+            {"code": code, "android_device_id": "android-A"},
+            format="json",
+        )
+        self.assertEqual(pair_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(pair_resp.data["status"], "paired")
+        self.assertEqual(pair_resp.data["device_id"], "android-A")
+        self.assertEqual(pair_resp.data["user_id"], self.user_a.id)
+
+    def test_invalid_code_returns_appropriate_error(self) -> None:
+        response = self.client.post(
+            "/api/device/pair/",
+            {"code": "INVALID-CODE", "android_device_id": "android-A"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.data["detail"], "Invalid or unknown pairing code.")
+
+    def test_expired_code_returns_appropriate_error(self) -> None:
+        code_obj = create_pairing_code(self.desktop_a)
+        code_obj.expires_at = timezone.now() - timedelta(seconds=1)
+        code_obj.save()
+
+        response = self.client.post(
+            "/api/device/pair/",
+            {"code": code_obj.code, "android_device_id": "android-A"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["detail"], "Pairing code has expired.")
+
+    def test_reused_code_returns_appropriate_error(self) -> None:
+        code_obj = create_pairing_code(self.desktop_a)
+        self.client.post(
+            "/api/device/pair/",
+            {"code": code_obj.code, "android_device_id": "android-A1"},
+            format="json",
+        )
+
+        response2 = self.client.post(
+            "/api/device/pair/",
+            {"code": code_obj.code, "android_device_id": "android-A2"},
+            format="json",
+        )
+        self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response2.data["detail"], "Pairing code has already been used.")
 
 
 class ClipboardApiTests(TestCase):

@@ -24,8 +24,48 @@
         android:textAppearance="?attr/textAppearanceCaption"
         android:textColor="?android:attr/textColorSecondary"
         android:paddingTop="4dp"
-        android:paddingBottom="12dp" />
+        android:paddingBottom="8dp" />
 
+    <!-- Pairing Section -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/label_pairing_title"
+        android:textAppearance="?attr/textAppearanceSubtitle2" />
+
+    <TextView
+        android:id="@+id/pairingStatusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/status_not_paired"
+        android:textAppearance="?attr/textAppearanceBody2"
+        android:paddingBottom="4dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="8dp">
+
+        <EditText
+            android:id="@+id/pairingCodeInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="@string/hint_pairing_code"
+            android:inputType="textCapCharacters"
+            android:maxLines="1"
+            android:fontFamily="monospace"
+            android:layout_marginEnd="8dp" />
+
+        <Button
+            android:id="@+id/pairButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/btn_pair_device" />
+    </LinearLayout>
+
+    <!-- Status Section -->
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -38,21 +78,21 @@
         android:layout_height="wrap_content"
         android:text="@string/status_stopped"
         android:textAppearance="?attr/textAppearanceBody1"
-        android:paddingBottom="12dp" />
+        android:paddingBottom="8dp" />
 
     <Button
         android:id="@+id/sendButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/btn_send_clipboard"
-        android:layout_marginBottom="8dp" />
+        android:layout_marginBottom="6dp" />
 
     <Button
         android:id="@+id/receiveButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/btn_receive_clipboard"
-        android:layout_marginBottom="8dp" />
+        android:layout_marginBottom="6dp" />
 
     <Button
         android:id="@+id/toggleButton"
@@ -60,14 +100,14 @@
         android:layout_height="wrap_content"
         android:text="@string/btn_start"
         style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-        android:layout_marginBottom="12dp" />
+        android:layout_marginBottom="8dp" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/label_recent_events"
         android:textAppearance="?attr/textAppearanceSubtitle2"
-        android:paddingTop="4dp" />
+        android:paddingTop="2dp" />
 
     <ScrollView
         android:layout_width="match_parent"

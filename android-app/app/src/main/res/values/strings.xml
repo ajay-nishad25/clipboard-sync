@@ -22,6 +22,14 @@
     <string name="status_no_entries">No clipboard entries found on backend.</string>
     <string name="status_receive_failed">Failed to receive clipboard: %1$s</string>
 
+    <!-- Pairing strings -->
+    <string name="label_pairing_title">Pair Desktop</string>
+    <string name="hint_pairing_code">AB7K-29XM</string>
+    <string name="btn_pair_device">PAIR DEVICE</string>
+    <string name="status_not_paired">Status: Not paired</string>
+    <string name="status_paired_success">Status: Paired with desktop successfully</string>
+    <string name="status_pairing_in_progress">Pairing device\u2026</string>
+
     <!-- Labels & Instructions -->
     <string name="label_status">Status</string>
     <string name="label_instructions">Copy text in any app, then open Clipboard Sync and tap Send Clipboard.\n\nReceive Clipboard gets the latest clipboard stored on the server.</string>

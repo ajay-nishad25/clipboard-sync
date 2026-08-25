@@ -6,7 +6,7 @@ The project synchronizes plain text clipboard data between a user's Windows desk
 
 ---
 
-## Current Implementation (Phases 1–8 Verified Baseline)
+## Implemented Architecture (Phases 1–9B Baseline)
 
 ```text
 Windows Clipboard
@@ -14,7 +14,8 @@ Windows Clipboard
       │  (set_last_content prevents feedback loop)
       ▼
 ClipboardMonitor (desktop-agent — persistent device ID: desktop-<uuid>)
-      │  (poll every 0.5 s; send new text only)
+      │  - Generates/displays pairing code (e.g. AB7K-29XM) via POST /api/device/pairing/create/
+      │  - Polls Windows clipboard every 0.5 s; sends new text only
       ▼
 ClipboardWebSocketClient (desktop-agent)
       │  - Main thread: send(content) → clipboard.update
@@ -23,121 +24,78 @@ ClipboardWebSocketClient (desktop-agent)
       ▼
 Django Backend (Daphne — HTTP + WebSocket on 127.0.0.1:8000)
       │
-      ├─── HTTP ──► REST API
-      │             GET /api/clipboard/latest/ → Android [RECEIVE CLIPBOARD] & Desktop Catch-Up
+      ├─── Device / User Association ──► Device (desktop-<uuid>) ──► User A ◄── Device (android-<uuid>)
+      │                                                                           ▲
+      │                                                                           │ (POST /api/device/pair/)
+      │                                                                 Android App (Java)
       │
-      └─── WS ───► ClipboardConsumer (Group: clipboard_sync_group)
-                   clipboard.update  → ClipboardEntry.create() → clipboard.ack to sender
-                                     → group_send() broadcast clipboard.remote_update to others
+      ├─── REST API ──────────────────► GET /api/clipboard/latest/?device_id=...
+      │                                 (Returns caller User's active ClipboardState if < 10m old)
+      │
+      └─── WS ────────────────────────► ClipboardConsumer (User Group: clipboard_user_<user_id>)
+                                        clipboard.update → set_user_clipboard() → clipboard.ack to sender
+                                                        → group_send() broadcast clipboard.remote_update to user group
 ```
 
 ### Android Architecture Constraints (MUST NOT BE CHANGED)
 Android complies strictly with Android 10+ background clipboard restrictions (API 29+):
 - **No Background Clipboard Harvesting**: Background services cannot access `ClipboardManager.getPrimaryClip()`.
+- **Pair Desktop UI**: User enters 8-character code (e.g. `AB7K-29XM`) in `MainActivity` to pair with Desktop's owner User account (`POST /api/device/pair/`). Pairing state persists in `SharedPreferences`.
 - **Manual SEND**: User taps `[ SEND CLIPBOARD ]` in user-focused `MainActivity`, transmitting text over WebSocket.
 - **Manual RECEIVE**: User taps `[ RECEIVE CLIPBOARD ]`, fetching the latest entry via `GET /api/clipboard/latest/` HTTP REST.
 - **Persistent Device ID**: Saved in Android `SharedPreferences` (`android-<uuid>`).
 
 ---
 
-## Target Multi-User Architecture (Phase 9 — PLANNED / NEXT)
+## Multi-User & Device Pairing Architecture (Phase 9)
 
-Phase 9 transitions the project from a single-user proof-of-concept to a production-ready, multi-user architecture centered around **User Data Isolation**.
+Phase 9 transitions the project from a single-user proof-of-concept to a multi-user architecture centered around **User Data Isolation** and **Device Pairing**.
 
-```text
-                                 PRODUCTION ARCHITECTURE
-                                 
-Client Layer                    Transport & Gateway                 Backend & Persistence Layer
-────────────                    ───────────────────                 ───────────────────────────
-Desktop Agent A (Windows)  ──┐
-                             ├──► HTTPS / WSS ──► Reverse Proxy ──► Django ASGI (Daphne)
-Android App A (Java)       ──┘    (wss://api.example.com)               │
-                                                                       ├──► User-Scoped Channels
-                                                                       │    (Group: clipboard_user_A)
-Desktop Agent B (Windows)  ──┐                                         │
-                             ├──► HTTPS / WSS ──► Reverse Proxy ───────┼──► PostgreSQL (User/Devices)
-Android App B (Java)       ──┘    (wss://api.example.com)               │
-                                                                       └──► Redis Channel Layer
-```
-
-### 1. User Identity & Data Isolation Model
+### 1. User Identity & Device Pairing Model
 - **Ownership Hierarchy**:
   ```text
   User (User ID)
-   ├── Desktop Device (Authenticated Token)
-   └── Android Device (Authenticated Token)
+   ├── Desktop Device (desktop-<uuid>)
+   └── Android Device (android-<uuid>)
   ```
-- **Authorization Enforcement**: Device IDs alone indicate device origin but do **not** grant access. Server validates device authentication tokens to determine User ownership.
-- **Strict Data Isolation**: User A and User B belong to distinct data domains. User A can never access or receive User B's clipboard data.
-
----
-
-### 2. Device Pairing & Lifecycle
-
-```text
-[ INSTALL ] ──► Device ID Generated ──► [ PAIRING ENROLLMENT ] ──► Token Issued ──► [ AUTHENTICATED SYNC ]
-                                                │
-                                                ▼
-                                    Desktop displays AB7K-29XM
-                                    Android user enters code
-                                    Backend associates Device → User
-```
-
-- **Enrollment Code**: Desktop Agent generates and displays a short, temporary pairing code (e.g. `AB7K-29XM`).
-- **Enrollment vs Credential**: The pairing code is used solely for initial enrollment. Upon validation, the backend issues a persistent device authentication token stored securely on the client.
-- **Lifecycle & Reset**:
-  - Device pairing persists across restarts.
-  - Device credential invalidation occurs on account unpair or device revocation.
-  - App uninstall or factory reset generates a new device identity requiring re-enrollment.
-
----
-
-### 3. User Clipboard Data Model & Data Minimization
-
-- **Single Active Entry**: Each user has exactly **one** current clipboard record (`User.CurrentClipboard`), replacing unlimited historical logs.
+- **Pairing Enrollment Flow (Phase 9B Implemented)**:
   ```text
-  User.CurrentClipboard
-    ├── content (Text)
-    ├── updated_at (Timestamp)
-    └── expires_at (Timestamp = updated_at + 10 minutes)
+  [ Desktop Startup ] ──► POST /api/device/pairing/create/ ──► Displays AB7K-29XM (Expires in 5 min)
+                                                                       │
+  [ Android App ]     ──► Enter Code + POST /api/device/pair/ ────────┘
+                               │
+                               ▼
+                    Django validates code (valid, unexpired, single-use)
+                    Associates Android Device with Desktop's User account
+                    Returns {"status": "paired", "device_id": "android-...", "user_id": 123}
   ```
-- **Automatic Replacement**: Copying new text overwrites the user's single active clipboard record.
+- **Security & Re-Pairing Rules**:
+  - Android device cannot select or supply `user_id`. The user identity comes solely from `pairing_code` $\rightarrow$ `desktop_device` $\rightarrow$ `desktop_user`.
+  - Re-pairing protection: An Android device already owned by User A cannot be silently moved to User B by submitting User B's pairing code (HTTP 409 Conflict).
 
 ---
 
-### 4. Ten-Minute Retention Expiration
-
-- **Retention Window**: `expires_at` is set to `now + 10 minutes`.
-- **Automatic Purge**: After 10 minutes, the backend purges or marks the clipboard entry unavailable. Stale data is never retained indefinitely.
-
----
-
-### 5. User-Scoped WebSocket Routing
-
-- **Group Name**: Replaces global `clipboard_sync_group` with user-scoped channel groups: `clipboard_user_<USER_ID>`.
-- **Data Flow**:
-  - Android A → Django → Validate Token → Update `User_A.CurrentClipboard` → Broadcast to `clipboard_user_A` → Desktop A.
-  - Messages never cross user boundary lines to `clipboard_user_B`.
+### 2. User Clipboard Data Model & Expiration
+- **Single Active Entry per User**: Each user has exactly **one** current clipboard record (`ClipboardState`), replacing historical logs.
+- **10-Minute Expiration**: `expires_at` is set to `now + 10 minutes`. On access, if `expires_at <= now`, the record is automatically purged from the database and returns 404 Not Found.
 
 ---
 
-### 6. Admin Panel & Privacy Controls
-
-- **Django Admin Interface**: Authorized administrators can inspect active Users, Paired Devices, connection states, and clip expiration times.
-- **Privacy Enforcement**:
-  - Restricted admin access with audit logging.
-  - Clipboard text contents omitted from standard application logs.
+### 3. User-Scoped WebSocket Routing
+- **Group Name**: User-scoped channel groups: `clipboard_user_<user_id>`.
+- **Data Flow**: Broadcasts (`clipboard.remote_update`) remain within `clipboard_user_<user_id>` and never cross user boundary lines.
 
 ---
 
-### 7. Production Infrastructure Roadmap
+### 4. Infrastructure Roadmap
 
-| Component | POC Baseline (Phases 1–8) | Production Target (Phase 9) |
+| Component | Current Implemented (Phases 1–9B) | Production Target (Phases 9C–9E) |
 |---|---|---|
 | **Database** | SQLite | PostgreSQL |
 | **Channel Layer** | `InMemoryChannelLayer` | Redis Channel Layer |
 | **Transport** | `http://`, `ws://` | `https://`, `wss://` (TLS) |
-| **Routing** | Global `clipboard_sync_group` | User-Scoped `clipboard_user_<USER_ID>` |
-| **Authentication** | Unauthenticated (trusted device_id) | Token Authentication / Server Validation |
-| **Retention** | Permanent `ClipboardEntry` log | Single record per user, 10-min expiration |
-| **Android Workflow** | Manual SEND / RECEIVE | Manual SEND / RECEIVE *(Preserved)* |
+| **Routing** | User-Scoped `clipboard_user_<user_id>` | User-Scoped `clipboard_user_<user_id>` |
+| **Device Pairing** | Temporary pairing code (`AB7K-29XM`) | Temporary pairing code (`AB7K-29XM`) |
+| **Authentication** | Dev Identity / Server Pairing | Persistent Token Authentication |
+| **Retention** | Single record per user, 10-min expiration | Single record per user, 10-min expiration |
+| **Android Workflow** | Manual SEND / RECEIVE + Pairing UI | Manual SEND / RECEIVE + Pairing UI |
