@@ -11,7 +11,7 @@ DEBUG = os.getenv("DJANGO_DEBUG", "True").lower() == "true"
 ALLOWED_HOSTS: list[str] = []
 
 INSTALLED_APPS = [
-    # "daphne",
+    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -19,7 +19,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
-    # "channels",
+    "channels",
     "clipboard",
 ]
 
@@ -49,13 +49,13 @@ TEMPLATES = [
     },
 ]
 WSGI_APPLICATION = "config.wsgi.application"
-# ASGI_APPLICATION = "config.asgi.application"
+ASGI_APPLICATION = "config.asgi.application"
 
-# CHANNEL_LAYERS = {
-#     "default": {
-#         "BACKEND": "channels.layers.InMemoryChannelLayer",
-#     }
-# }
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+    }
+}
 
 DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
 AUTH_PASSWORD_VALIDATORS: list[dict[str, str]] = []

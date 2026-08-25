@@ -6,16 +6,18 @@ Django backend.
 
 ## Current status
 
-Phase 3 (desktop agent to backend) is complete. The Python desktop agent sends
-each newly detected non-empty text value to the Django REST API, which stores
-it in SQLite. This is one-way development integration only, not device sync.
+Phase 5 (desktop real-time WebSocket sync) is complete. The Python desktop
+agent now sends each clipboard change as a `clipboard.update` WebSocket message
+to Django Channels, which validates the payload, stores it in SQLite, and
+returns a `clipboard.ack`. The REST API remains available for regression
+testing and manual inspection.
 
 ## Repository layout
 
 ```text
 clipboard-sync/
-├── backend/         # Django REST API and SQLite database
-├── desktop-agent/   # Python clipboard detector and HTTP client
+├── backend/         # Django REST API, SQLite, Channels WebSocket
+├── desktop-agent/   # Python clipboard detector and WebSocket client
 ├── android-app/     # Planned Java Android application
 ├── docs/            # Architecture, protocol, development, and progress docs
 ├── README.md
@@ -23,28 +25,28 @@ clipboard-sync/
 └── .gitignore
 ```
 
-## Planned technology
+## Technology
 
-- Backend: Python, Django, Django REST Framework, Django Channels, SQLite, and
-  WebSockets.
-- Desktop: Python, an appropriate cross-platform clipboard library, and a
-  WebSocket client.
-- Android: Android Studio, Java, Android `ClipboardManager`, and a compatible
-  WebSocket client.
+- Backend: Python, Django, Django REST Framework, Django Channels, Daphne, SQLite.
+- Desktop: Python, pyperclip, websockets (sync client).
+- Android: Android Studio, Java (planned).
 
-See [the architecture notes](docs/architecture.md),
-[development guide](docs/development.md), [protocol notes](docs/protocol.md),
-and [progress tracker](docs/progress.md) for the current plan.
+See [architecture](docs/architecture.md), [development](docs/development.md),
+[protocol](docs/protocol.md), and [progress](docs/progress.md) for details.
 
 ## Getting started
 
-For the desktop-agent setup, API URL/device configuration, and integration
-testing instructions, see [desktop-agent/README.md](desktop-agent/README.md).
-For backend setup, migrations, API examples, and tests, see
-[backend/README.md](backend/README.md).
+See [backend/README.md](backend/README.md) for backend setup and
+[desktop-agent/README.md](desktop-agent/README.md) for desktop-agent setup.
+
+## Endpoints
+
+| Protocol | Endpoint | Purpose |
+|----------|----------|---------|
+| HTTP | `POST /api/clipboard/` | Store a clipboard entry (regression testing) |
+| HTTP | `GET /api/clipboard/latest/` | Retrieve the newest entry |
+| WebSocket | `ws://127.0.0.1:8000/ws/clipboard/` | Real-time clipboard sync |
 
 ## Scope and safety
 
-This POC supports text only. Authentication begins later with a development
-device-token mechanism; Google OAuth is explicitly deferred. Never commit real
-secrets or a local `.env` file.
+Text only. Authentication begins later. Never commit real secrets or `.env`.

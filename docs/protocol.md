@@ -1,32 +1,117 @@
 # Protocol Notes
 
-## Current HTTP API
+## HTTP API (Phases 2–3, unchanged)
 
-Phase 2 provides development/testing endpoints only:
+- `POST /api/clipboard/` — create a clipboard entry.
+- `GET /api/clipboard/latest/` — return the most recently created entry.
 
-- `POST /api/clipboard/` creates a plain-text clipboard entry.
-- `GET /api/clipboard/latest/` returns the most recently created entry, or
-  `404 Not Found` when none exists.
+### Create request
 
-The API has no authentication, client integration, or WebSocket support yet.
+```json
+{"device_id": "desktop-001", "content": "Hello World"}
+```
 
-## Create request and response
+Both fields required. `content` must be a non-empty JSON string. Returns
+`201 Created` with `id` and `created_at`.
+
+---
+
+## WebSocket endpoint (Phases 4–5)
+
+```text
+ws://127.0.0.1:8000/ws/clipboard/
+ws://127.0.0.1:8000/ws/clipboard/?device_id=<id>
+```
+
+`device_id` in the query string is used for connection-level logging only.
+Each `clipboard.update` message carries its own `device_id`.
+
+### `test.message` (Phase 4 — connectivity test)
+
+Send:
+
+```json
+{"type": "test.message", "message": "Hello WebSocket"}
+```
+
+Receive:
+
+```json
+{"type": "test.ack", "message": "Hello WebSocket"}
+```
+
+### `clipboard.update` (Phase 5 — clipboard sync)
+
+Send:
 
 ```json
 {
+  "type": "clipboard.update",
   "device_id": "desktop-001",
-  "content": "Hello World"
+  "content": "Hello from Windows"
 }
 ```
 
-Both fields are required. `content` must be a non-empty JSON string. A
-successful request returns `201 Created` and includes the server-generated `id`
-and `created_at` fields.
+Both `device_id` and `content` are required non-empty strings.
 
-## Planned event shape
+Receive on success:
 
-Later WebSocket clipboard events will use a structured JSON message, rather
-than arbitrary payloads. A representative later-phase message is:
+```json
+{
+  "type": "clipboard.ack",
+  "device_id": "desktop-001",
+  "status": "stored"
+}
+```
+
+### `clipboard.remote_update` (Phase 7 — server-to-client broadcast)
+
+When Django receives a valid `clipboard.update` from any connected device, it broadcasts `clipboard.remote_update` to all **other** connected WebSocket devices in the `clipboard_sync_group`:
+
+Server → Client Receive:
+
+```json
+{
+  "type": "clipboard.remote_update",
+  "device_id": "android-001",
+  "content": "Hello from Android"
+}
+```
+
+The sender of `clipboard.update` receives `clipboard.ack` and does **not** receive `clipboard.remote_update`.
+
+### Error responses
+
+The server returns a structured error and **keeps the connection open**:
+
+```json
+{"type": "error", "code": "<code>", "detail": "<human-readable detail>"}
+```
+
+| Situation | `code` |
+|-----------|--------|
+| Non-JSON text received | `invalid_json` |
+| JSON value is not an object | `invalid_message` |
+| `type` is not a supported value | `unsupported_type` |
+| Missing/non-string `message` (test.message) | `invalid_message` |
+| Missing/non-string/blank `device_id` (clipboard.update) | `invalid_message` |
+| Empty or non-string `content` | `invalid_content` |
+
+### Phase 5 limitations
+
+- No broadcasting: `clipboard.update` is stored but not forwarded to other
+  connected clients.
+- `InMemoryChannelLayer` — not shared across processes, resets on restart.
+- No authentication or device authorization.
+- No reconnection logic on the server side.
+- The desktop agent does not queue or retry values missed during an outage.
+
+---
+
+## Planned event shape (Phase 6+)
+
+Later phases will add `event_id` and `source_device` fields for idempotency
+and event-loop prevention:
 
 ```json
 {
@@ -37,13 +122,9 @@ than arbitrary payloads. A representative later-phase message is:
 }
 ```
 
-## Rules
+Rules:
 
 - `content` is plain text only.
 - `event_id` is unique for every clipboard event.
-- `source_device` identifies the device that originated the user action.
-- Receivers use the event and source identity to prevent event loops and ignore
-  duplicates.
-- Endpoint paths, acknowledgement behavior, validation rules, and
-  authentication details will be documented when their corresponding phases are
-  implemented and tested.
+- `source_device` identifies the originating device.
+- Receivers use event and source identity to prevent loops and ignore duplicates.

@@ -1,4 +1,4 @@
-"""WebSocket routes for the clipboard application."""
+"""WebSocket URL routes for the clipboard application."""
 
 from django.urls import path
 

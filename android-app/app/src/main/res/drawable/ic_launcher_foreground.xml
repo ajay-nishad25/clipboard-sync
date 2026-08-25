@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Clipboard icon foreground for the adaptive launcher icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Clipboard body -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M34,40 L34,82 L74,82 L74,40 Z" />
+
+    <!-- Clipboard clip at top -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,36 Q44,28 54,28 Q64,28 64,36 L64,42 L44,42 Z" />
+
+    <!-- Lines representing text -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,54 L66,54" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,63 L66,63" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,72 L56,72" />
+
+</vector>

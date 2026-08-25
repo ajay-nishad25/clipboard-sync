@@ -1,0 +1,147 @@
+"""WebSocket consumer for the clipboard application."""
+
+from __future__ import annotations
+
+import json
+import logging
+from urllib.parse import parse_qs
+
+from channels.db import database_sync_to_async
+from channels.generic.websocket import AsyncWebsocketConsumer
+
+from clipboard.models import ClipboardEntry
+
+logger = logging.getLogger(__name__)
+
+
+GROUP_NAME = "clipboard_sync_group"
+
+
+class ClipboardConsumer(AsyncWebsocketConsumer):
+    """Handle WebSocket connections for clipboard synchronization.
+
+    Supported message types:
+    - test.message  — Phase 4 connectivity test, echoes back a test.ack.
+    - clipboard.update — Phase 5: store text clipboard content, return clipboard.ack,
+      and broadcast a clipboard.remote_update to other connected clients (Phase 7).
+    """
+
+    async def connect(self) -> None:
+        self.device_id = self._get_device_id()
+        await self.channel_layer.group_add(GROUP_NAME, self.channel_name)
+        await self.accept()
+        logger.info("WebSocket connection accepted for device %s.", self.device_id or "unknown")
+
+    async def disconnect(self, close_code: int) -> None:
+        await self.channel_layer.group_discard(GROUP_NAME, self.channel_name)
+        logger.info(
+            "WebSocket disconnected for device %s with code %s.",
+            getattr(self, "device_id", None) or "unknown",
+            close_code,
+        )
+
+    async def receive(self, text_data: str | None = None, bytes_data: bytes | None = None) -> None:
+        if bytes_data is not None or text_data is None:
+            await self._send_error("invalid_json", "WebSocket messages must contain JSON text.")
+            return
+
+        try:
+            message = json.loads(text_data)
+        except json.JSONDecodeError:
+            logger.warning("Invalid JSON received from device %s.", self.device_id or "unknown")
+            await self._send_error("invalid_json", "Message must be valid JSON.")
+            return
+
+        if not isinstance(message, dict):
+            await self._send_error("invalid_message", "Message must be a JSON object.")
+            return
+
+        message_type = message.get("type")
+        if message_type == "test.message":
+            await self._handle_test_message(message)
+        elif message_type == "clipboard.update":
+            await self._handle_clipboard_update(message)
+        else:
+            logger.warning("Unsupported WebSocket message type from device %s.", self.device_id or "unknown")
+            await self._send_error(
+                "unsupported_type",
+                "Supported message types: test.message, clipboard.update.",
+            )
+
+    async def _handle_test_message(self, message: dict) -> None:
+        text = message.get("message")
+        if not isinstance(text, str) or not text:
+            await self._send_error("invalid_message", "test.message requires a non-empty text message.")
+            return
+
+        logger.info("WebSocket test message received from device %s.", self.device_id or "unknown")
+        await self.send(text_data=json.dumps({"type": "test.ack", "message": text}))
+        logger.info("WebSocket acknowledgement sent to device %s.", self.device_id or "unknown")
+
+    async def _handle_clipboard_update(self, message: dict) -> None:
+        device_id = message.get("device_id")
+        if not isinstance(device_id, str) or not device_id.strip():
+            await self._send_error(
+                "invalid_message",
+                "clipboard.update requires a non-empty device_id string.",
+            )
+            return
+
+        content = message.get("content")
+        if not isinstance(content, str) or not content:
+            await self._send_error(
+                "invalid_content",
+                "Clipboard content must be a non-empty string.",
+            )
+            return
+
+        await database_sync_to_async(ClipboardEntry.objects.create)(
+            device_id=device_id,
+            content=content,
+        )
+        logger.info("Clipboard entry stored from device %s via WebSocket.", device_id)
+
+        await self.send(
+            text_data=json.dumps(
+                {"type": "clipboard.ack", "device_id": device_id, "status": "stored"}
+            )
+        )
+        logger.info("Clipboard acknowledgement sent to device %s.", device_id)
+
+        await self.channel_layer.group_send(
+            GROUP_NAME,
+            {
+                "type": "clipboard_broadcast",
+                "sender_device_id": device_id,
+                "content": content,
+            },
+        )
+
+    async def clipboard_broadcast(self, event: dict) -> None:
+        """Broadcast a remote clipboard update to connected clients except the sender."""
+        sender_device_id = event.get("sender_device_id")
+        if sender_device_id != self.device_id:
+            content = event.get("content", "")
+            await self.send(
+                text_data=json.dumps(
+                    {
+                        "type": "clipboard.remote_update",
+                        "device_id": sender_device_id,
+                        "content": content,
+                    }
+                )
+            )
+            logger.info(
+                "Broadcasted remote clipboard update from device %s to device %s.",
+                sender_device_id,
+                self.device_id or "unknown",
+            )
+
+    def _get_device_id(self) -> str | None:
+        query = parse_qs(self.scope["query_string"].decode("utf-8"))
+        values = query.get("device_id")
+        return values[0] if values else None
+
+    async def _send_error(self, code: str, detail: str) -> None:
+        logger.warning("Invalid WebSocket message from device %s: %s.", self.device_id or "unknown", code)
+        await self.send(text_data=json.dumps({"type": "error", "code": code, "detail": detail}))

@@ -1,0 +1,5 @@
+// Top-level build file: plugin declarations only.
+// Do not add build logic or dependencies here.
+plugins {
+    id 'com.android.application' version '9.0.0' apply false
+}

@@ -9,67 +9,66 @@ one user's devices, not a production service.
 ## Planned components
 
 ```text
-Desktop Agent (Python)  ── HTTP / WebSocket ──┐
-                                              │
-                                      Django Backend
-                                      - REST API
-                                      - Channels/WebSocket
-                                      - SQLite (initially)
-                                              │
-Android App (Java)     ── HTTP / WebSocket ──┘
+Desktop Agent (Python)  ── WebSocket ──┐
+                                       │
+                               Django Backend
+                               - REST API
+                               - Channels/WebSocket
+                               - SQLite
+                                       │
+Android App (Java)     ── WebSocket ──┘
 ```
 
-- The desktop agent will run on Windows first and be designed with Linux in
-  mind.
-- The backend will begin with SQLite. Redis is not part of Phase 0 and will be
-  added only if Django Channels implementation actually requires it.
-- The Android app will initially receive and display messages before it writes
-  to the system clipboard.
-
-## Current implementation
-
-Phase 1 implements a local desktop detector. It polls the operating-system
-clipboard through `pyperclip`, logs each new non-empty text value once, and
-handles clipboard read failures without exiting.
-
-Phase 2 adds a local Django REST API with a SQLite database. Phase 3 connects
-the desktop agent to its existing `POST /api/clipboard/` endpoint using JSON
-and the development device ID `desktop-001`.
+## Current implementation (Phase 7)
 
 ```text
-Windows clipboard text
-      |
-      v
-Python desktop agent
-      |
-      | HTTP POST /api/clipboard/
-      v
-Django REST API
-      |
-      v
-SQLite ClipboardEntry records
+Windows Clipboard
+      ▲  (apply remote_update via pyperclip.copy)
+      │  (set_last_content prevents feedback loop)
+      ▼
+ClipboardMonitor (desktop-agent)
+      │  (poll every 0.5 s; send new text only)
+      ▼
+ClipboardWebSocketClient (desktop-agent)
+      │  - Main thread: send(content) → clipboard.update
+      │  - Listener thread: recv() → queue dispatch & remote update callback
+      ▼
+Django Backend (Daphne — HTTP + WebSocket on same port)
+      │
+      ├─── HTTP ──► REST API
+      │             GET  /api/clipboard/latest/ → Android [RECEIVE CLIPBOARD]
+      │
+      └─── WS ───► ClipboardConsumer (Group: clipboard_sync_group)
+                   clipboard.update  → ClipboardEntry.create() → clipboard.ack to sender
+                                     → group_send() broadcast clipboard.remote_update to others
 ```
 
-The agent uses `requests` with a five-second default timeout. It logs network,
-timeout, HTTP-status, and unexpected-response failures, then keeps monitoring.
-It does not queue or retry failed values. The backend currently has no
-WebSocket, Channels, client authentication, or device authorization.
+The desktop agent maintains one persistent WebSocket connection. On connection
+loss it reconnects with bounded backoff (2 s → 5 s → 15 s → 30 s).
+Clipboard values that arrive during an outage are not queued.
+
+The REST API is kept intact for regression testing and Android manual fetch.
 
 ## Identity and authentication roadmap
 
-Phase 0 has no authentication implementation. Early development will identify
-devices with development IDs/tokens. The planned order is development token,
-user/device authentication, Google OAuth, then device pairing.
+Phase 0 has no authentication. Early development uses development IDs/tokens.
+Planned order: development token → user/device authentication → Google OAuth →
+device pairing.
 
 ## Data boundary
 
 Only plain text clipboard data is in scope. Images, files, rich text,
-screenshots, passwords, and arbitrary binary clipboard data are excluded until
-the text workflow is reliable.
+screenshots, passwords, and arbitrary binary clipboard data are excluded.
 
-## Event-loop prevention (planned)
+## Event-loop prevention (Phase 7)
 
-Each synchronization event will have a unique event ID and source device ID.
-When a client applies a received event to its clipboard, it must recognize that
-change as synchronization-generated and not send the same event back to the
-server.
+When Desktop Agent receives `clipboard.remote_update` over WebSocket:
+1. It writes the text to the Windows clipboard via `pyperclip.copy(content)`.
+2. It immediately updates `ClipboardMonitor.set_last_content(content)`.
+3. When the monitoring loop polls `read_clipboard()` 0.5s later, `content == self._last_content` evaluates to `True`, automatically suppressing outbound synchronization and preventing feedback loops.
+
+## Channel layer
+
+Phase 7 uses `InMemoryChannelLayer`. It is not shared across processes and
+resets on server restart. Redis will be introduced only if a concrete
+multi-process deployment need requires it.

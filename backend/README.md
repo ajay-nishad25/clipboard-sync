@@ -1,8 +1,8 @@
 # Clipboard Sync Backend
 
-Phase 2 provides a development-only Django REST API backed by SQLite. It stores
-plain-text clipboard entries for API testing only; it does not connect to the
-desktop agent, Android, WebSockets, Channels, or authentication.
+Phase 5 makes `clipboard.update` a first-class WebSocket message. The desktop
+agent sends clipboard changes over WebSocket; Django validates, stores, and
+acknowledges them. The REST API from Phases 2–3 remains intact.
 
 ## Prerequisites
 
@@ -17,14 +17,11 @@ py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-Set a local Django development secret. Do not commit its value:
+Set a local Django development secret:
 
 ```powershell
 $env:DJANGO_SECRET_KEY = "choose-a-long-unique-local-development-value"
 ```
-
-`DJANGO_DEBUG` defaults to `True` for this POC. See `.env.example` for the
-expected variable names; Django does not load `.env` files automatically.
 
 ## Install dependencies
 
@@ -33,13 +30,14 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
+`pyproject.toml` declares `Django`, `djangorestframework`, `channels`, and
+`daphne`. All are installed by the command above.
+
 ## Database migrations
 
 ```powershell
 python manage.py migrate
 ```
-
-SQLite stores local data in `db.sqlite3`, which is ignored by Git.
 
 ## Start the development server
 
@@ -47,50 +45,91 @@ SQLite stores local data in `db.sqlite3`, which is ignored by Git.
 python manage.py runserver
 ```
 
-The server listens on `http://127.0.0.1:8000/` by default. This is a local,
-development-only server.
+Daphne (listed first in `INSTALLED_APPS`) takes over `runserver` and handles
+both HTTP and WebSocket connections on `http://127.0.0.1:8000/`.
 
-## API endpoints
+## REST API
 
 ### Create an entry
 
 `POST /api/clipboard/`
 
-Required JSON fields:
-
 ```json
-{
-  "device_id": "desktop-001",
-  "content": "Hello World"
-}
+{"device_id": "desktop-001", "content": "Hello World"}
 ```
 
-Example PowerShell request:
-
-```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/clipboard/ `
-  -ContentType "application/json" `
-  -Body '{"device_id":"desktop-001","content":"Hello World"}'
-```
-
-It returns `201 Created` with the entry, including its database-generated `id`
-and `created_at` timestamp. `content` must be a non-empty JSON string.
+Returns `201 Created`. Used for regression testing; in normal Phase 5 operation
+the desktop agent uses WebSocket instead.
 
 ### Get the latest entry
 
 `GET /api/clipboard/latest/`
 
-```powershell
-Invoke-RestMethod -Uri http://127.0.0.1:8000/api/clipboard/latest/
+Returns `200 OK` with the latest entry, or `404 Not Found`.
+
+## WebSocket endpoint
+
+```text
+ws://127.0.0.1:8000/ws/clipboard/
+ws://127.0.0.1:8000/ws/clipboard/?device_id=desktop-001
 ```
 
-It returns `200 OK` with the latest entry, or `404 Not Found` with a JSON
-detail message when no entry has been created.
+### Supported messages
 
-## Test
+#### `test.message` (Phase 4 — still supported)
+
+Send: `{"type": "test.message", "message": "Hello WebSocket"}`
+Receive: `{"type": "test.ack", "message": "Hello WebSocket"}`
+
+#### `clipboard.update` (Phase 5)
+
+Send:
+
+```json
+{"type": "clipboard.update", "device_id": "desktop-001", "content": "Hello from Windows"}
+```
+
+Receive on success:
+
+```json
+{"type": "clipboard.ack", "device_id": "desktop-001", "status": "stored"}
+```
+
+### Error responses
+
+```json
+{"type": "error", "code": "<code>", "detail": "<detail>"}
+```
+
+| Situation | `code` |
+|-----------|--------|
+| Non-JSON text | `invalid_json` |
+| Not a JSON object | `invalid_message` |
+| Unsupported `type` | `unsupported_type` |
+| Missing/non-string `message` (test.message) | `invalid_message` |
+| Missing/non-string `device_id` (clipboard.update) | `invalid_message` |
+| Empty or non-string `content` | `invalid_content` |
+
+## Tests
 
 ```powershell
 python manage.py test
 ```
 
-The test suite uses Django's built-in test runner and an isolated test database.
+Expected: **15 tests**, all passing (5 REST, 5 WebSocket infrastructure, 5
+clipboard.update).
+
+## WebSocket smoke test
+
+Start the dev server, then in a second terminal:
+
+```powershell
+python scripts/websocket_smoke_test.py
+```
+
+Override the URL if port 8000 is occupied:
+
+```powershell
+$env:WEBSOCKET_SMOKE_URL = "ws://127.0.0.1:8001/ws/clipboard/?device_id=desktop-001"
+python scripts/websocket_smoke_test.py
+```
