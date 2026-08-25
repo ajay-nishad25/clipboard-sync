@@ -1,10 +1,12 @@
 # Android Clipboard Sync App
 
-Phase 6 Java Android application that implements **Manual Android Clipboard Synchronization**
-compatible with Android 10+ / Android 14 restrictions.
+Java Android application implementing **Manual Android Clipboard Synchronization** compatible with Android 10+ / Android 14 (API 34) restrictions.
 
-## Architecture
+---
 
+## Current Verified Baseline (Phases 1–8)
+
+### Architecture Diagram
 ```text
                                  ANDROID APP
                                       │
@@ -28,54 +30,52 @@ ClipboardWebSocketClient                                         │
  "Clipboard sent successfully"
 ```
 
-## Build & Test
-
+### Build & Test
 ```powershell
 cd android-app
-# Run unit tests
-.\gradlew.bat test
-
-# Build debug APK
-.\gradlew.bat assembleDebug
+.\gradlew.bat test            # Run unit tests (ClipboardApiClientTest, ConfigTest)
+.\gradlew.bat assembleDebug   # Build debug APK
 ```
 
-The APK is placed at: `app/build.gradle` → `app/build/outputs/apk/debug/app-debug.apk`
+### Physical Device USB Setup
+```powershell
+adb reverse tcp:8000 tcp:8000
+.\gradlew.bat installDebug
+```
 
-## Physical Device Setup (USB Debugging)
+---
 
-1. Connect your physical Android device (e.g. Realme Android 14) via USB with USB Debugging enabled.
-2. Enable port forwarding:
-   ```powershell
-   adb reverse tcp:8000 tcp:8000
-   ```
-3. Install the debug APK:
-   ```powershell
-   .\gradlew.bat installDebug
-   ```
+## Mandatory Architectural Rules (MUST NOT BE CHANGED)
 
-## User Workflows
+1. **Manual Clipboard Workflows Only**:
+   - `[ SEND CLIPBOARD ]`: Reads system clipboard in user-focused `MainActivity` and sends over WebSocket.
+   - `[ RECEIVE CLIPBOARD ]`: Fetches latest entry via HTTP REST (`GET /api/clipboard/latest/`) and applies to Android clipboard via `setPrimaryClip()`.
+2. **No Background Clipboard Harvesting**:
+   - `ClipboardMonitorService` manages background WebSocket lifecycle only.
+   - It does **not** call `getPrimaryClip()` while running in the background, in compliance with Android 10+ privacy restrictions.
 
-### 1. SEND CLIPBOARD
-1. Open **Clipboard Sync** app on Android → tap **START** to establish WebSocket connection.
-2. Copy any text in Chrome, WhatsApp, Notes, etc.
-3. Return to **Clipboard Sync** app.
-4. Tap **`SEND CLIPBOARD`**.
-5. `MainActivity` reads the clipboard while focused, dispatches text over WebSocket (`clipboard.update`), waits for `clipboard.ack` from Django, and displays:
-   `"Clipboard sent successfully"`
+---
 
-### 2. RECEIVE CLIPBOARD
-1. Ensure desktop agent has sent text to Django (or an entry exists in backend DB).
-2. Open **Clipboard Sync** app on Android.
-3. Tap **`RECEIVE CLIPBOARD`**.
-4. Android fetches the latest entry via `GET http://127.0.0.1:8000/api/clipboard/latest/`, writes it to Android clipboard using `setPrimaryClip()`, and displays:
-   `"Clipboard received successfully"`
-5. Paste into any Android application.
+## Persistent Device ID
 
-## Permissions
+- Auto-generates a persistent device UUID (`android-<uuid>`) saved in Android `SharedPreferences` (`clipboard_sync_prefs`).
+- Reused across app restarts; reset only upon app re-install or clear data.
 
-| Permission | Purpose |
-|---|---|
-| `INTERNET` | WebSocket connection & REST HTTP requests to Django backend |
-| `FOREGROUND_SERVICE` | Maintain background WebSocket connection |
-| `FOREGROUND_SERVICE_DATA_SYNC` | API 34+: foreground service type for data sync |
-| `POST_NOTIFICATIONS` | API 33+: show service notification |
+---
+
+## Phase 9 Android Roadmap (PLANNED / NEXT)
+
+Phase 9 adds device pairing and user authentication to the Android application:
+
+1. **Pairing Screen UI**:
+   - User inputs the pairing code displayed by Desktop Agent (e.g. `AB7K-29XM`).
+   - Taps **`[ PAIR DEVICE ]`**.
+2. **Device Enrollment**:
+   - App calls `POST /api/device/pair/` with pairing code and device ID.
+   - Backend returns user association and persistent device token.
+   - Device token saved securely in Android `SharedPreferences`.
+3. **Authenticated Communication**:
+   - WebSocket connection includes device token (`wss://api.example.com/ws/clipboard/?token=<device_token>`).
+   - `[ RECEIVE CLIPBOARD ]` sends `Authorization: Bearer <device_token>` header.
+4. **Data Isolation Guarantee**:
+   - Android A sends/receives clipboard data restricted strictly to User A's channel scope (`clipboard_user_A`).

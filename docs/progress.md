@@ -9,6 +9,7 @@
 - [x] Phase 6 — Android Application
 - [x] Phase 7 — Server-Side Broadcasting & Remote Desktop Clipboard Update
 - [x] Phase 8 — Desktop Catch-Up, Persistent Device Identity & Android Testing
+- [ ] Phase 9 — Multi-User Identity, Device Pairing, Data Isolation & Production Readiness (PLANNED / NEXT)
 
 ## Phase 0 outcome
 
@@ -103,3 +104,12 @@ Verification results:
 - Backend: 17/17 tests passing.
 - Desktop Agent: 43/43 unit tests passing.
 - Android: 9 unit tests passing (`ClipboardApiClientTest` + `ConfigTest`), APK build successful.
+
+## Phase 9 Planned Scope (PLANNED / NEXT)
+
+Phase 9 defines the architecture for multi-user identity, device pairing, user data isolation, and production readiness:
+- **Phase 9A**: Multi-user data model (`User.CurrentClipboard`), 10-minute expiration, user-scoped Channels routing (`clipboard_user_<USER_ID>`).
+- **Phase 9B**: Desktop ↔ Android enrollment/pairing (`AB7K-29XM` code -> persistent token).
+- **Phase 9C**: Authenticated WebSockets and REST APIs with token validation.
+- **Phase 9D**: HTTPS/WSS production configuration.
+- **Phase 9E**: PostgreSQL, Redis Channel Layer, and deployment hardening.

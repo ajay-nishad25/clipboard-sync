@@ -1,14 +1,12 @@
 # Clipboard Sync Backend
 
-Phase 5 makes `clipboard.update` a first-class WebSocket message. The desktop
-agent sends clipboard changes over WebSocket; Django validates, stores, and
-acknowledges them. The REST API from Phases 2–3 remains intact.
+Django REST Framework and Django Channels backend for clipboard synchronization.
 
 ## Prerequisites
 
 - Python 3.11 or later
 
-## Environment setup
+## Environment Setup (Development Baseline)
 
 From `backend/` in PowerShell:
 
@@ -23,113 +21,70 @@ Set a local Django development secret:
 $env:DJANGO_SECRET_KEY = "choose-a-long-unique-local-development-value"
 ```
 
-## Install dependencies
+Install dependencies:
 
 ```powershell
 python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-`pyproject.toml` declares `Django`, `djangorestframework`, `channels`, and
-`daphne`. All are installed by the command above.
-
-## Database migrations
+Database migrations & start dev server:
 
 ```powershell
 python manage.py migrate
+python manage.py runserver     # Daphne serves HTTP + WebSocket on http://127.0.0.1:8000/
 ```
 
-## Start the development server
+---
 
-```powershell
-python manage.py runserver
-```
+## Current Verified Baseline Endpoints (Phases 1–8)
 
-Daphne (listed first in `INSTALLED_APPS`) takes over `runserver` and handles
-both HTTP and WebSocket connections on `http://127.0.0.1:8000/`.
+### HTTP REST API
+- `POST /api/clipboard/` — Store a clipboard entry (regression testing).
+- `GET /api/clipboard/latest/` — Retrieve newest clipboard entry.
 
-## REST API
-
-### Create an entry
-
-`POST /api/clipboard/`
-
-```json
-{"device_id": "desktop-001", "content": "Hello World"}
-```
-
-Returns `201 Created`. Used for regression testing; in normal Phase 5 operation
-the desktop agent uses WebSocket instead.
-
-### Get the latest entry
-
-`GET /api/clipboard/latest/`
-
-Returns `200 OK` with the latest entry, or `404 Not Found`.
-
-## WebSocket endpoint
-
+### WebSocket Endpoint
 ```text
-ws://127.0.0.1:8000/ws/clipboard/
-ws://127.0.0.1:8000/ws/clipboard/?device_id=desktop-001
+ws://127.0.0.1:8000/ws/clipboard/?device_id=<id>
 ```
 
-### Supported messages
+#### Supported Messages
+- `test.message`: Connectivity test (`test.ack`).
+- `clipboard.update`: Client outbound clipboard update (`clipboard.ack`).
+- `clipboard.remote_update`: Server-side broadcast to other connected clients in `clipboard_sync_group`.
 
-#### `test.message` (Phase 4 — still supported)
-
-Send: `{"type": "test.message", "message": "Hello WebSocket"}`
-Receive: `{"type": "test.ack", "message": "Hello WebSocket"}`
-
-#### `clipboard.update` (Phase 5)
-
-Send:
-
-```json
-{"type": "clipboard.update", "device_id": "desktop-001", "content": "Hello from Windows"}
-```
-
-Receive on success:
-
-```json
-{"type": "clipboard.ack", "device_id": "desktop-001", "status": "stored"}
-```
-
-### Error responses
-
-```json
-{"type": "error", "code": "<code>", "detail": "<detail>"}
-```
-
-| Situation | `code` |
-|-----------|--------|
-| Non-JSON text | `invalid_json` |
-| Not a JSON object | `invalid_message` |
-| Unsupported `type` | `unsupported_type` |
-| Missing/non-string `message` (test.message) | `invalid_message` |
-| Missing/non-string `device_id` (clipboard.update) | `invalid_message` |
-| Empty or non-string `content` | `invalid_content` |
-
-## Tests
-
+### Automated Verification
 ```powershell
 python manage.py test
 ```
+Expected: **17 tests**, all passing (REST, WS infrastructure, clipboard.update, remote broadcasting).
 
-Expected: **15 tests**, all passing (5 REST, 5 WebSocket infrastructure, 5
-clipboard.update).
+---
 
-## WebSocket smoke test
+## Phase 9 Backend Architecture & Security Roadmap (PLANNED / NEXT)
 
-Start the dev server, then in a second terminal:
+Phase 9 transforms the backend into a production-ready, multi-user service focused on **User Data Isolation**.
 
-```powershell
-python scripts/websocket_smoke_test.py
-```
+### 1. User Data Isolation Model
+- **User Ownership**:
+  - `User` has one active `CurrentClipboard` entry.
+  - `User.CurrentClipboard` stores `content`, `updated_at`, and `expires_at` (`now + 10 minutes`).
+  - Copying new text overwrites the previous entry. Historical entries are not kept indefinitely.
+- **10-Minute Retention**: Entries older than 10 minutes are automatically deleted or marked unavailable.
 
-Override the URL if port 8000 is occupied:
+### 2. User-Scoped Channel Routing
+- Replace global `clipboard_sync_group` with user-scoped channel groups: `clipboard_user_<USER_ID>`.
+- Client `clipboard.update` broadcasts `clipboard.remote_update` **only** to connections belonging to the same authenticated user. User A and User B channels are strictly segregated.
 
-```powershell
-$env:WEBSOCKET_SMOKE_URL = "ws://127.0.0.1:8001/ws/clipboard/?device_id=desktop-001"
-python scripts/websocket_smoke_test.py
-```
+### 3. Device Pairing & Authentication
+- `POST /api/device/pair/`: Validates temporary pairing codes (e.g. `AB7K-29XM`) and issues persistent device tokens.
+- Token validation required on WebSocket connect (`wss://`) and REST API requests.
+
+### 4. Admin Panel & Privacy Controls
+- Restricted Django admin views for authenticated administrators to monitor User devices, connection states, and clip expiration.
+- Clipboard text content omitted from application logs.
+
+### 5. Production Infrastructure
+- **Database**: PostgreSQL (replacing SQLite).
+- **Channel Layer**: Redis Channel Layer (replacing `InMemoryChannelLayer`).
+- **Deployment**: Daphne ASGI behind reverse proxy with HTTPS/WSS (TLS).

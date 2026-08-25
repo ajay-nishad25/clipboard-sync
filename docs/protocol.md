@@ -1,130 +1,113 @@
 # Protocol Notes
 
-## HTTP API (Phases 2–3, unchanged)
+## Verified Baseline Protocol (Phases 1–8)
 
-- `POST /api/clipboard/` — create a clipboard entry.
-- `GET /api/clipboard/latest/` — return the most recently created entry.
+### HTTP API
+- `POST /api/clipboard/` — Store a clipboard entry (regression testing).
+- `GET /api/clipboard/latest/` — Return the most recently created clipboard entry.
 
-### Create request
-
-```json
-{"device_id": "desktop-001", "content": "Hello World"}
-```
-
-Both fields required. `content` must be a non-empty JSON string. Returns
-`201 Created` with `id` and `created_at`.
-
----
-
-## WebSocket endpoint (Phases 4–5)
+### WebSocket Endpoint (Phases 4–8)
 
 ```text
-ws://127.0.0.1:8000/ws/clipboard/
 ws://127.0.0.1:8000/ws/clipboard/?device_id=<id>
 ```
 
-`device_id` in the query string is used for connection-level logging only.
-Each `clipboard.update` message carries its own `device_id`.
+#### Message Types
 
-### `test.message` (Phase 4 — connectivity test)
+1. **`test.message`** (Phase 4 — Connectivity Test):
+   - Send: `{"type": "test.message", "message": "Hello"}`
+   - Receive: `{"type": "test.ack", "message": "Hello"}`
 
-Send:
+2. **`clipboard.update`** (Phase 5 — Client Outbound Clipboard Update):
+   - Send: `{"type": "clipboard.update", "device_id": "desktop-4f2a91c8", "content": "Hello World"}`
+   - Receive (Sender ACK): `{"type": "clipboard.ack", "device_id": "desktop-4f2a91c8", "status": "stored"}`
 
-```json
-{"type": "test.message", "message": "Hello WebSocket"}
-```
+3. **`clipboard.remote_update`** (Phase 7 — Server Inbound Remote Broadcast):
+   - Server → Client Receive: `{"type": "clipboard.remote_update", "device_id": "android-b17f39a0", "content": "Hello from Android"}`
 
-Receive:
-
-```json
-{"type": "test.ack", "message": "Hello WebSocket"}
-```
-
-### `clipboard.update` (Phase 5 — clipboard sync)
-
-Send:
-
-```json
-{
-  "type": "clipboard.update",
-  "device_id": "desktop-001",
-  "content": "Hello from Windows"
-}
-```
-
-Both `device_id` and `content` are required non-empty strings.
-
-Receive on success:
-
-```json
-{
-  "type": "clipboard.ack",
-  "device_id": "desktop-001",
-  "status": "stored"
-}
-```
-
-### `clipboard.remote_update` (Phase 7 — server-to-client broadcast)
-
-When Django receives a valid `clipboard.update` from any connected device, it broadcasts `clipboard.remote_update` to all **other** connected WebSocket devices in the `clipboard_sync_group`:
-
-Server → Client Receive:
-
-```json
-{
-  "type": "clipboard.remote_update",
-  "device_id": "android-001",
-  "content": "Hello from Android"
-}
-```
-
-The sender of `clipboard.update` receives `clipboard.ack` and does **not** receive `clipboard.remote_update`.
-
-### Error responses
-
-The server returns a structured error and **keeps the connection open**:
-
+#### Error Responses (Baseline)
 ```json
 {"type": "error", "code": "<code>", "detail": "<human-readable detail>"}
 ```
-
-| Situation | `code` |
-|-----------|--------|
-| Non-JSON text received | `invalid_json` |
-| JSON value is not an object | `invalid_message` |
-| `type` is not a supported value | `unsupported_type` |
-| Missing/non-string `message` (test.message) | `invalid_message` |
-| Missing/non-string/blank `device_id` (clipboard.update) | `invalid_message` |
-| Empty or non-string `content` | `invalid_content` |
-
-### Phase 5 limitations
-
-- No broadcasting: `clipboard.update` is stored but not forwarded to other
-  connected clients.
-- `InMemoryChannelLayer` — not shared across processes, resets on restart.
-- No authentication or device authorization.
-- No reconnection logic on the server side.
-- The desktop agent does not queue or retry values missed during an outage.
+Codes: `invalid_json`, `invalid_message`, `unsupported_type`, `invalid_content`.
 
 ---
 
-## Planned event shape (Phase 6+)
+## Phase 9 Protocol Roadmap (PLANNED / NEXT)
 
-Later phases will add `event_id` and `source_device` fields for idempotency
-and event-loop prevention:
+Phase 9 upgrades transport and framing to enforce **User Identity**, **Device Pairing**, and **Authentication**.
 
-```json
-{
-  "type": "clipboard.update",
-  "event_id": "unique-event-id",
-  "source_device": "desktop-001",
-  "content": "Hello World"
-}
+### 1. Authenticated Transport & Connection
+
+```text
+wss://api.example.com/ws/clipboard/?token=<device_token>
 ```
 
-Rules:
+- **Authentication Header / Query Parameter**: WebSocket handshake requires a valid `<device_token>`.
+- **Connection Rejection**: Unauthenticated or invalid token connections are rejected immediately (`4001 Unauthorized`).
 
-- `content` is plain text only.
-- `event_id` is unique for every clipboard event.
-- `source_device` identifies the originating device.
-- Receivers use event and source identity to prevent loops and ignore duplicates.
+---
+
+### 2. Device Pairing Endpoint
+
+```text
+POST /api/device/pair/
+```
+
+- **Request**:
+  ```json
+  {
+    "device_id": "android-b17f39a0",
+    "pairing_code": "AB7K-29XM"
+  }
+  ```
+- **Response (200 OK)**:
+  ```json
+  {
+    "status": "paired",
+    "user_id": "user_12345",
+    "device_token": "devtok_9876543210abcdef"
+  }
+  ```
+- **Error (400 Bad Request / 401 Unauthorized)**:
+  ```json
+  {
+    "error": "invalid_pairing_code",
+    "detail": "Pairing code expired or invalid."
+  }
+  ```
+
+---
+
+### 3. User-Scoped WebSocket Broadcast
+
+- Inbound `clipboard.remote_update` messages are routed **only** to connections belonging to the authenticated `User` (`clipboard_user_<USER_ID>`).
+- Payload contains sender device metadata:
+  ```json
+  {
+    "type": "clipboard.remote_update",
+    "sender_device_id": "android-b17f39a0",
+    "content": "Authenticated user text",
+    "timestamp": "2026-08-25T18:00:00Z"
+  }
+  ```
+
+---
+
+### 4. Authenticated REST API & 10-Minute Expiration
+
+```text
+GET /api/clipboard/latest/
+Header: Authorization: Bearer <device_token>
+```
+
+- **Response (200 OK)**:
+  ```json
+  {
+    "content": "Latest user clipboard",
+    "updated_at": "2026-08-25T18:05:00Z",
+    "expires_at": "2026-08-25T18:15:00Z"
+  }
+  ```
+- **Expired Entry Response (404 Not Found)**:
+  - If `now > expires_at` (older than 10 minutes), the server returns `404 Not Found` (`"Clipboard entry expired"`).

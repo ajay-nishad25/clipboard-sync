@@ -1,42 +1,42 @@
 # Development Guide
 
-## Phase-by-phase workflow
+## Phase-by-Phase Workflow
 
-Work on one phase at a time. Before proceeding, run relevant checks, document
-the result, and confirm the phase has a working, testable state.
-
-## Current setup
-
-### Phase 1 — Desktop clipboard detection
-
-`desktop-agent/` polls the OS clipboard via `pyperclip` and logs each new
-non-empty text value once.
-
-### Phase 2 — Django backend
-
-`backend/` is a Django project with Django REST Framework and SQLite. The
-`ClipboardEntry` model and HTTP API are covered by Django's test runner.
-
-### Phase 3 — Desktop agent to backend
-
-`desktop-agent/` sends clipboard text to `POST /api/clipboard/` via `requests`.
-The HTTP `ClipboardBackendClient` class is retained for regression tests.
-
-### Phase 4 — WebSocket infrastructure
-
-`backend/` now runs under Daphne and handles WebSocket connections via Django
-Channels. `ClipboardConsumer` accepts `test.message` and returns `test.ack`.
-
-### Phase 5 — Desktop real-time WebSocket sync
-
-`clipboard.update` is now the primary clipboard sync message. The desktop agent
-uses `ClipboardWebSocketClient` (websockets sync API) as its transport, with
-bounded-backoff reconnection.
+Work on one phase at a time. Before proceeding, run relevant checks, document the result, and confirm the phase has a working, testable state.
 
 ---
 
-## Backend setup
+## Current Verified Baseline (Phases 1–8)
 
+### Phase 1 — Desktop Clipboard Detection
+`desktop-agent/` polls OS clipboard via `pyperclip` and logs each distinct text value.
+
+### Phase 2 — Django Backend
+`backend/` Django REST Framework & SQLite backend (`ClipboardEntry` model, HTTP API).
+
+### Phase 3 — Desktop Agent to Backend HTTP
+`desktop-agent/` sends text to `POST /api/clipboard/` via `requests`.
+
+### Phase 4 — WebSocket Infrastructure
+Daphne serves HTTP and WebSocket via Django Channels (`test.message` / `test.ack`).
+
+### Phase 5 — Desktop Real-Time WebSocket Sync
+`clipboard.update` / `clipboard.ack` over `ClipboardWebSocketClient` with bounded-backoff reconnection.
+
+### Phase 6 — Android Application
+Manual Android clipboard sync (`[ SEND CLIPBOARD ]` over WS, `[ RECEIVE CLIPBOARD ]` over HTTP GET) adhering to Android 10+ background clipboard access rules.
+
+### Phase 7 — Bidirectional Update Broadcasting
+Server broadcasts `clipboard.remote_update` to connected devices in `clipboard_sync_group`. Desktop Agent applies updates via `pyperclip.copy()` and suppresses outbound sync loops via `monitor.set_last_content()`.
+
+### Phase 8 — Desktop Catch-Up & Persistent Identity
+Desktop Agent recovers `GET /api/clipboard/latest/` on startup/reconnect. Persistent UUID device IDs for Desktop (`~/.clipboard_sync/device_id.txt`) and Android (`SharedPreferences`).
+
+---
+
+## Component Setup Commands (Baseline)
+
+### 1. Backend Setup
 ```powershell
 cd backend
 py -m venv .venv
@@ -44,68 +44,72 @@ py -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -e .
 python manage.py migrate
-python manage.py runserver      # Daphne serves HTTP + WebSocket
+python manage.py runserver      # Daphne serves HTTP + WebSocket on 127.0.0.1:8000
 ```
-
-Run all tests (15 total):
-
+Run backend tests (17 total):
 ```powershell
 python manage.py test
 ```
 
-Smoke test (server must be running):
-
-```powershell
-python scripts/websocket_smoke_test.py
-```
-
-## Desktop-agent setup
-
+### 2. Desktop Agent Setup
 ```powershell
 cd desktop-agent
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e .      # installs pyperclip, requests, websockets
+python -m pip install -e .
 clipboard-agent
 ```
-
-Run all tests (37 total):
-
+Run desktop tests (43 total):
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-## Manual integration test
-
-1. Start Django (`python manage.py runserver` from `backend/`).
-2. Start the agent (`clipboard-agent` from `desktop-agent/`).
-3. Copy text on Windows.
-4. Confirm sync log in the agent terminal.
-5. Verify with: `Invoke-RestMethod -Uri http://127.0.0.1:8000/api/clipboard/latest/`
-
-## Failure/recovery test
-
-1. Start the agent, confirm a successful sync.
-2. Stop Django. Copy text. Confirm the agent logs a failure without crashing.
-3. Restart Django. Copy a new value. Confirm reconnection and sync.
-
-## Future work
-
-- Android Studio and Gradle instructions will be added when the Android project
-  is initialized.
-
-## Quality expectations
-
-Readable code, focused modules, useful logs, appropriate tests, clear error
-handling. Python follows PEP 8 and uses `logging`. Android stays in Java unless
-explicitly changed. Keep `.env` files and real credentials out of version
-control.
-
-## Git guidance
-
-Use small, logical commits. Example:
-
-```text
-feat: add clipboard.update WebSocket handler (Phase 5)
+### 3. Android App Setup
+```powershell
+cd android-app
+.\gradlew.bat test
+.\gradlew.bat assembleDebug
 ```
+
+---
+
+## Phase 9 Sub-Phases Roadmap (PLANNED / NEXT)
+
+- [ ] **Phase 9A — Multi-User Data Model & User Isolation**
+  - Implement `User.CurrentClipboard` model with single-record replacement and 10-minute expiration.
+  - Implement user-scoped channel groups (`clipboard_user_<USER_ID>`).
+- [ ] **Phase 9B — Desktop ↔ Android Pairing**
+  - Implement Desktop pairing code generation (`AB7K-29XM`).
+  - Implement Android pairing screen and backend token exchange endpoint (`POST /api/device/pair/`).
+- [ ] **Phase 9C — Authenticated WebSocket & REST Communication**
+  - Require device authentication tokens for WebSocket connections and REST requests.
+  - Enforce server-side ownership validation for all clipboard operations.
+- [ ] **Phase 9D — Production Configuration & HTTPS/WSS**
+  - Support configurable production transport endpoints (`https://` and `wss://`).
+  - Enforce TLS in production while retaining local HTTP/WS development options.
+- [ ] **Phase 9E — Production Deployment & Hardening**
+  - Configure PostgreSQL, Redis Channels layer, Daphne ASGI deployment, secrets management, and admin auditing.
+
+---
+
+## Mandatory Multi-User Isolation Tests (Phase 9 Planned)
+
+Future Phase 9 implementation must create test suites verifying:
+
+1. **User Isolation Sync**: `User A Android` → `User A Desktop` (**PASS**).
+2. **Cross-User Isolation**: `User A Android` → `User B Desktop` (**MUST NOT RECEIVE**).
+3. **Cross-User Isolation**: `User B Android` → `User A Desktop` (**MUST NOT RECEIVE**).
+4. **REST Data Isolation**: `User A REST request` → `User B clipboard` (**MUST NOT ACCESS**).
+5. **Unpaired Device Rejection**: Unpaired device request → `clipboard API` (**MUST NOT ACCESS**).
+6. **Authentication Rejection**: Invalid device token → WebSocket connection (**REJECTED**).
+7. **Expiration Retention**: Clipboard entry older than 10 minutes (**DELETED / UNAVAILABLE**).
+
+---
+
+## Quality & Security Expectations
+
+- **Plain Text Only**: No binary, image, screenshot, or rich-text data.
+- **Android Restrictions**: Do NOT attempt background clipboard harvesting on Android 10+. Maintain manual `[ SEND CLIPBOARD ]` and `[ RECEIVE CLIPBOARD ]` UI triggers.
+- **Privacy & Logging**: Clipboard content must never be printed to application logs.
+- **Secret Safety**: Never commit credentials, tokens, or `.env` files to git.
