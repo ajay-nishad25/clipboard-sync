@@ -1,6 +1,3 @@
-Absolutely. Below is a complete root README.md you can use for the project. It explains what Clipboard Sync is, architecture, features, project structure, complete local setup, backend, admin, desktop agent, Android build/install, pairing, and end-to-end usage.
-
-The commands are based on the current project state through Phase 9C. Django's standard development flow uses migrate followed by runserver, and Android's Gradle wrapper can build/install the debug APK.
 
 # Clipboard Sync
 
