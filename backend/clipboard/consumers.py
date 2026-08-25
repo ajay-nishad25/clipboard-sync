@@ -1,4 +1,4 @@
-"""WebSocket consumer for user-isolated clipboard synchronization."""
+"""WebSocket consumer for user-isolated authenticated clipboard synchronization."""
 
 from __future__ import annotations
 
@@ -10,13 +10,13 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 from clipboard.models import ClipboardEntry
-from clipboard.services import resolve_device_and_user, set_user_clipboard
+from clipboard.services import authenticate_device_token, set_user_clipboard
 
 logger = logging.getLogger(__name__)
 
 
 class ClipboardConsumer(AsyncWebsocketConsumer):
-    """Handle WebSocket connections for clipboard synchronization with user data isolation.
+    """Handle WebSocket connections for authenticated clipboard synchronization with user data isolation.
 
     Supported message types:
     - test.message — Connectivity test, echoes back test.ack.
@@ -26,22 +26,28 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
     """
 
     async def connect(self) -> None:
-        self.device_id = self._get_device_id()
-        self.device, self.user = None, None
+        self.raw_token = self._get_token()
+        self.cred, self.device, self.user = None, None, None
         self.group_name = None
+        self.device_id = None
 
-        if self.device_id:
-            self.device, self.user = await database_sync_to_async(resolve_device_and_user)(self.device_id)
+        if self.raw_token:
+            self.cred, self.device, self.user = await database_sync_to_async(authenticate_device_token)(self.raw_token)
 
-        if self.user:
-            self.group_name = f"clipboard_user_{self.user.id}"
-            await self.channel_layer.group_add(self.group_name, self.channel_name)
+        if not self.cred or not self.device or not self.user:
+            logger.warning("Rejecting unauthenticated WebSocket connection.")
+            await self.close(code=4001)
+            return
+
+        self.device_id = self.device.device_id
+        self.group_name = f"clipboard_user_{self.user.id}"
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
 
         await self.accept()
         logger.info(
-            "WebSocket connection accepted for device %s (User %s).",
-            self.device_id or "unknown",
-            self.user.username if self.user else "none",
+            "WebSocket connection accepted for authenticated device %s (User %s).",
+            self.device_id,
+            self.user.username,
         )
 
     async def disconnect(self, close_code: int) -> None:
@@ -91,14 +97,6 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({"type": "test.ack", "message": text}))
 
     async def _handle_clipboard_update(self, message: dict) -> None:
-        device_id = message.get("device_id")
-        if not isinstance(device_id, str) or not device_id.strip():
-            await self._send_error(
-                "invalid_message",
-                "clipboard.update requires a non-empty device_id string.",
-            )
-            return
-
         content = message.get("content")
         if not isinstance(content, str) or not content:
             await self._send_error(
@@ -107,21 +105,14 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
             )
             return
 
-        device, user = await database_sync_to_async(resolve_device_and_user)(device_id)
-        if not user:
-            await self._send_error("invalid_device", "Device ID is not associated with a user.")
+        if not self.user or not self.device:
+            await self._send_error("unauthorized", "Unauthenticated WebSocket connection.")
             return
 
-        # Ensure consumer is joined to the user's channel group
-        user_group = f"clipboard_user_{user.id}"
-        if self.group_name != user_group:
-            if self.group_name:
-                await self.channel_layer.group_discard(self.group_name, self.channel_name)
-            self.group_name = user_group
-            await self.channel_layer.group_add(self.group_name, self.channel_name)
+        device_id = self.device.device_id
 
         # Replace active ClipboardState for user (10-minute expiration)
-        await database_sync_to_async(set_user_clipboard)(user, content)
+        await database_sync_to_async(set_user_clipboard)(self.user, content)
 
         # Store legacy ClipboardEntry log
         await database_sync_to_async(ClipboardEntry.objects.create)(
@@ -129,7 +120,7 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
             content=content,
         )
 
-        logger.info("ClipboardState updated for user %s via device %s.", user.username, device_id)
+        logger.info("ClipboardState updated for user %s via device %s.", self.user.username, device_id)
 
         # Send ACK to sender
         await self.send(
@@ -140,7 +131,7 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
 
         # Broadcast remote_update ONLY to user's isolated channel group
         await self.channel_layer.group_send(
-            user_group,
+            self.group_name,
             {
                 "type": "clipboard_broadcast",
                 "sender_device_id": device_id,
@@ -168,10 +159,18 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
                 self.device_id or "unknown",
             )
 
-    def _get_device_id(self) -> str | None:
+    def _get_token(self) -> str | None:
         query = parse_qs(self.scope["query_string"].decode("utf-8"))
-        values = query.get("device_id")
-        return values[0] if values else None
+        tokens = query.get("token")
+        if tokens and tokens[0].strip():
+            return tokens[0].strip()
+
+        # Development fallback query param
+        device_ids = query.get("device_id")
+        if device_ids and device_ids[0].strip():
+            return device_ids[0].strip()
+
+        return None
 
     async def _send_error(self, code: str, detail: str) -> None:
         logger.warning("Invalid WebSocket message from device %s: %s.", self.device_id or "unknown", code)

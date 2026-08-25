@@ -33,13 +33,15 @@ class ClipboardWebSocketClient:
         self,
         ws_url: str,
         device_id: str,
-        logger: logging.Logger,
+        credential: str = "",
+        logger: logging.Logger | None = None,
         on_remote_update: RemoteUpdateHandler | None = None,
         on_connected: ConnectionHandler | None = None,
     ) -> None:
         self._base_url = ws_url.rstrip("/") + "/"
         self._device_id = device_id
-        self._logger = logger
+        self._credential = credential or device_id
+        self._logger = logger or logging.getLogger(__name__)
         self._on_remote_update = on_remote_update
         self._on_connected = on_connected
 
@@ -215,9 +217,10 @@ class ClipboardWebSocketClient:
                 self._connection = None
 
     def _build_url(self) -> str:
-        """Return the WebSocket URL with the device_id query parameter."""
+        """Return the WebSocket URL with token and device_id query parameters."""
         sep = "&" if "?" in self._base_url else "?"
-        return f"{self._base_url}{sep}device_id={self._device_id}"
+        token_str = self._credential or self._device_id
+        return f"{self._base_url}{sep}token={token_str}&device_id={self._device_id}"
 
     def _advance_backoff(self) -> None:
         """Record the next earliest reconnection time and advance the index."""

@@ -24,7 +24,7 @@ import com.clipboard.sync.api.ClipboardApiClient;
 /**
  * Main entry point for Clipboard Sync.
  * Provides user-controlled [SEND CLIPBOARD] and [RECEIVE CLIPBOARD] actions,
- * device pairing with desktop accounts, and service toggles.
+ * device pairing with desktop accounts, and service toggles using authenticated credentials.
  */
 public class MainActivity extends AppCompatActivity {
 
@@ -126,9 +126,12 @@ public class MainActivity extends AppCompatActivity {
 
         apiClient.pairDevice(Config.PAIRING_URL, code, androidDeviceId, new ClipboardApiClient.PairCallback() {
             @Override
-            public void onSuccess(String statusVal, int userId) {
+            public void onSuccess(String statusVal, String credential, int userId) {
                 runOnUiThread(() -> {
                     Config.setPaired(MainActivity.this, true);
+                    if (credential != null && !credential.trim().isEmpty()) {
+                        Config.setDeviceToken(MainActivity.this, credential.trim());
+                    }
                     updatePairingStatusDisplay();
                     pairingCodeInput.setText("");
                     appendLog("Device paired with user #" + userId);
@@ -210,7 +213,8 @@ public class MainActivity extends AppCompatActivity {
     private void receiveClipboard() {
         statusText.setText(R.string.status_receiving);
 
-        apiClient.getLatestClipboard(Config.REST_LATEST_URL, new ClipboardApiClient.ApiCallback() {
+        String deviceToken = Config.getDeviceToken(this);
+        apiClient.getLatestClipboard(Config.REST_LATEST_URL, deviceToken, new ClipboardApiClient.ApiCallback() {
             @Override
             public void onSuccess(String content) {
                 runOnUiThread(() -> {

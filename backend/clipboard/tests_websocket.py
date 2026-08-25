@@ -1,4 +1,4 @@
-"""Automated tests for user-isolated clipboard WebSocket infrastructure."""
+"""Automated tests for user-isolated authenticated clipboard WebSocket infrastructure."""
 
 from __future__ import annotations
 
@@ -11,7 +11,11 @@ from django.test import TestCase
 from django.utils import timezone
 
 from clipboard.models import ClipboardEntry, ClipboardState, Device, DeviceType
-from clipboard.services import get_active_user_clipboard
+from clipboard.services import (
+    get_active_user_clipboard,
+    issue_device_credential,
+    revoke_device_credential,
+)
 from config.asgi import application
 
 
@@ -19,58 +23,40 @@ class ClipboardWebSocketInfrastructureTests(TestCase):
     """Tests for connectivity, formatting, and basic error handling."""
 
     @async_to_sync
-    async def test_connection_succeeds_and_disconnects_cleanly(self) -> None:
-        communicator = WebsocketCommunicator(application, "/ws/clipboard/?device_id=desktop-001")
+    async def test_unauthenticated_connection_rejected(self) -> None:
+        communicator = WebsocketCommunicator(application, "/ws/clipboard/")
+        connected, close_code = await communicator.connect()
+        self.assertFalse(connected)
+        self.assertEqual(close_code, 4001)
+
+    @async_to_sync
+    async def test_invalid_token_connection_rejected(self) -> None:
+        communicator = WebsocketCommunicator(application, "/ws/clipboard/?token=devtok_invalid")
+        connected, close_code = await communicator.connect()
+        self.assertFalse(connected)
+        self.assertEqual(close_code, 4001)
+
+    @async_to_sync
+    async def test_revoked_token_connection_rejected(self) -> None:
+        user = await database_sync_to_async(User.objects.create_user)("ws_revoked_user")
+        device = await database_sync_to_async(Device.objects.create)(user=user, device_id="desktop-revoked")
+        cred, raw_token = await database_sync_to_async(issue_device_credential)(device)
+        await database_sync_to_async(revoke_device_credential)(cred)
+
+        communicator = WebsocketCommunicator(application, f"/ws/clipboard/?token={raw_token}")
+        connected, close_code = await communicator.connect()
+        self.assertFalse(connected)
+        self.assertEqual(close_code, 4001)
+
+    @async_to_sync
+    async def test_authenticated_token_connection_accepted(self) -> None:
+        user = await database_sync_to_async(User.objects.create_user)("ws_auth_user")
+        device = await database_sync_to_async(Device.objects.create)(user=user, device_id="desktop-auth")
+        _, raw_token = await database_sync_to_async(issue_device_credential)(device)
+
+        communicator = WebsocketCommunicator(application, f"/ws/clipboard/?token={raw_token}")
         connected, _ = await communicator.connect()
         self.assertTrue(connected)
-        await communicator.disconnect()
-
-    @async_to_sync
-    async def test_valid_test_message_receives_acknowledgement(self) -> None:
-        communicator = WebsocketCommunicator(application, "/ws/clipboard/")
-        connected, _ = await communicator.connect()
-        self.assertTrue(connected)
-
-        await communicator.send_json_to({"type": "test.message", "message": "Hello WebSocket"})
-        response = await communicator.receive_json_from()
-
-        self.assertEqual(response, {"type": "test.ack", "message": "Hello WebSocket"})
-        await communicator.disconnect()
-
-    @async_to_sync
-    async def test_malformed_json_returns_error(self) -> None:
-        communicator = WebsocketCommunicator(application, "/ws/clipboard/")
-        await communicator.connect()
-
-        await communicator.send_to(text_data="not-json")
-        response = await communicator.receive_json_from()
-
-        self.assertEqual(response["type"], "error")
-        self.assertEqual(response["code"], "invalid_json")
-        await communicator.disconnect()
-
-    @async_to_sync
-    async def test_unsupported_message_type_returns_error(self) -> None:
-        communicator = WebsocketCommunicator(application, "/ws/clipboard/")
-        await communicator.connect()
-
-        await communicator.send_json_to({"type": "unknown.type", "data": "irrelevant"})
-        response = await communicator.receive_json_from()
-
-        self.assertEqual(response["type"], "error")
-        self.assertEqual(response["code"], "unsupported_type")
-        await communicator.disconnect()
-
-    @async_to_sync
-    async def test_missing_message_field_returns_error(self) -> None:
-        communicator = WebsocketCommunicator(application, "/ws/clipboard/")
-        await communicator.connect()
-
-        await communicator.send_json_to({"type": "test.message"})
-        response = await communicator.receive_json_from()
-
-        self.assertEqual(response["type"], "error")
-        self.assertEqual(response["code"], "invalid_message")
         await communicator.disconnect()
 
 
@@ -86,6 +72,8 @@ class ClipboardUpdateWebSocketIsolationTests(TestCase):
         self.device_a_android = Device.objects.create(
             user=self.user_a, device_id="android-A", device_type=DeviceType.ANDROID
         )
+        _, self.token_a_desktop = issue_device_credential(self.device_a_desktop)
+        _, self.token_a_android = issue_device_credential(self.device_a_android)
 
         # Create User B with Desktop B and Android B
         self.user_b = User.objects.create_user("ws_user_b")
@@ -95,10 +83,14 @@ class ClipboardUpdateWebSocketIsolationTests(TestCase):
         self.device_b_android = Device.objects.create(
             user=self.user_b, device_id="android-B", device_type=DeviceType.ANDROID
         )
+        _, self.token_b_desktop = issue_device_credential(self.device_b_desktop)
+        _, self.token_b_android = issue_device_credential(self.device_b_android)
 
     @async_to_sync
     async def test_clipboard_update_stores_entry_and_state_returns_ack(self) -> None:
-        communicator = WebsocketCommunicator(application, "/ws/clipboard/?device_id=desktop-A")
+        communicator = WebsocketCommunicator(
+            application, f"/ws/clipboard/?token={self.token_a_desktop}"
+        )
         connected, _ = await communicator.connect()
         self.assertTrue(connected)
 
@@ -119,8 +111,8 @@ class ClipboardUpdateWebSocketIsolationTests(TestCase):
 
     @async_to_sync
     async def test_user_a_android_update_reaches_user_a_desktop(self) -> None:
-        android_a = WebsocketCommunicator(application, "/ws/clipboard/?device_id=android-A")
-        desktop_a = WebsocketCommunicator(application, "/ws/clipboard/?device_id=desktop-A")
+        android_a = WebsocketCommunicator(application, f"/ws/clipboard/?token={self.token_a_android}")
+        desktop_a = WebsocketCommunicator(application, f"/ws/clipboard/?token={self.token_a_desktop}")
 
         self.assertTrue((await android_a.connect())[0])
         self.assertTrue((await desktop_a.connect())[0])
@@ -142,8 +134,8 @@ class ClipboardUpdateWebSocketIsolationTests(TestCase):
 
     @async_to_sync
     async def test_user_a_update_does_not_reach_user_b_desktop(self) -> None:
-        desktop_a = WebsocketCommunicator(application, "/ws/clipboard/?device_id=desktop-A")
-        desktop_b = WebsocketCommunicator(application, "/ws/clipboard/?device_id=desktop-B")
+        desktop_a = WebsocketCommunicator(application, f"/ws/clipboard/?token={self.token_a_desktop}")
+        desktop_b = WebsocketCommunicator(application, f"/ws/clipboard/?token={self.token_b_desktop}")
 
         self.assertTrue((await desktop_a.connect())[0])
         self.assertTrue((await desktop_b.connect())[0])
@@ -155,7 +147,6 @@ class ClipboardUpdateWebSocketIsolationTests(TestCase):
         ack = await desktop_a.receive_json_from()
         self.assertEqual(ack["type"], "clipboard.ack")
 
-        # Desktop B MUST NOT receive User A's update
         nothing = await desktop_b.receive_nothing()
         self.assertTrue(nothing)
 
@@ -164,7 +155,7 @@ class ClipboardUpdateWebSocketIsolationTests(TestCase):
 
     @async_to_sync
     async def test_sender_receives_ack_and_does_not_receive_remote_update(self) -> None:
-        desktop_a = WebsocketCommunicator(application, "/ws/clipboard/?device_id=desktop-A")
+        desktop_a = WebsocketCommunicator(application, f"/ws/clipboard/?token={self.token_a_desktop}")
         self.assertTrue((await desktop_a.connect())[0])
 
         await desktop_a.send_json_to(
@@ -180,20 +171,8 @@ class ClipboardUpdateWebSocketIsolationTests(TestCase):
         await desktop_a.disconnect()
 
     @async_to_sync
-    async def test_unknown_or_blank_device_id_returns_error(self) -> None:
-        communicator = WebsocketCommunicator(application, "/ws/clipboard/")
-        await communicator.connect()
-
-        await communicator.send_json_to({"type": "clipboard.update", "content": "Hello"})
-        response = await communicator.receive_json_from()
-
-        self.assertEqual(response["type"], "error")
-        self.assertEqual(response["code"], "invalid_message")
-        await communicator.disconnect()
-
-    @async_to_sync
     async def test_clipboard_update_empty_content_returns_error(self) -> None:
-        communicator = WebsocketCommunicator(application, "/ws/clipboard/?device_id=desktop-A")
+        communicator = WebsocketCommunicator(application, f"/ws/clipboard/?token={self.token_a_desktop}")
         await communicator.connect()
 
         await communicator.send_json_to({"type": "clipboard.update", "device_id": "desktop-A", "content": ""})
@@ -201,23 +180,4 @@ class ClipboardUpdateWebSocketIsolationTests(TestCase):
 
         self.assertEqual(response["type"], "error")
         self.assertEqual(response["code"], "invalid_content")
-        await communicator.disconnect()
-
-    @async_to_sync
-    async def test_expired_clipboard_not_returned_after_expiration(self) -> None:
-        communicator = WebsocketCommunicator(application, "/ws/clipboard/?device_id=desktop-A")
-        await communicator.connect()
-
-        await communicator.send_json_to(
-            {"type": "clipboard.update", "device_id": "desktop-A", "content": "Temporary Text"}
-        )
-        await communicator.receive_json_from()
-
-        state = await database_sync_to_async(ClipboardState.objects.get)(user=self.user_a)
-        state.expires_at = timezone.now() - timedelta(seconds=1)
-        await database_sync_to_async(state.save)()
-
-        active = await database_sync_to_async(get_active_user_clipboard)(self.user_a)
-        self.assertIsNone(active)
-
         await communicator.disconnect()

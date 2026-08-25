@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
-from clipboard.models import ClipboardEntry, ClipboardState, Device, PairingCode
+from clipboard.models import ClipboardEntry, ClipboardState, Device, DeviceCredential, PairingCode
 
 
 class TextOnlyField(serializers.CharField):
@@ -41,6 +41,10 @@ class DeviceSerializer(serializers.ModelSerializer):
         model = Device
         fields = ("id", "user", "device_id", "device_type", "created_at", "updated_at")
         read_only_fields = ("id", "created_at", "updated_at")
+
+
+class DeviceCredentialRegisterSerializer(serializers.Serializer):
+    device_id = serializers.CharField(required=True, allow_blank=False)
 
 
 class PairingCodeCreateSerializer(serializers.Serializer):

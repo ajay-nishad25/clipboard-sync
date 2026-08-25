@@ -20,7 +20,7 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 
 /**
- * Unit tests for ClipboardApiClient response parsing and error handling.
+ * Unit tests for ClipboardApiClient response parsing, token authentication, and pairing.
  */
 public class ClipboardApiClientTest {
 
@@ -53,7 +53,7 @@ public class ClipboardApiClientTest {
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicReference<String> resultRef = new AtomicReference<>();
 
-        apiClient.getLatestClipboard("http://localhost/api/clipboard/latest/", new ClipboardApiClient.ApiCallback() {
+        apiClient.getLatestClipboard("http://localhost/api/clipboard/latest/", "devtok_test", new ClipboardApiClient.ApiCallback() {
             @Override
             public void onSuccess(String content) {
                 resultRef.set(content);
@@ -79,7 +79,7 @@ public class ClipboardApiClientTest {
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicBoolean notFoundCalled = new AtomicBoolean(false);
 
-        apiClient.getLatestClipboard("http://localhost/api/clipboard/latest/", new ClipboardApiClient.ApiCallback() {
+        apiClient.getLatestClipboard("http://localhost/api/clipboard/latest/", "devtok_test", new ClipboardApiClient.ApiCallback() {
             @Override
             public void onSuccess(String content) {}
 
@@ -105,7 +105,7 @@ public class ClipboardApiClientTest {
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicReference<String> errorRef = new AtomicReference<>();
 
-        apiClient.getLatestClipboard("http://localhost/api/clipboard/latest/", new ClipboardApiClient.ApiCallback() {
+        apiClient.getLatestClipboard("http://localhost/api/clipboard/latest/", "devtok_test", new ClipboardApiClient.ApiCallback() {
             @Override
             public void onSuccess(String content) {}
 
@@ -132,7 +132,7 @@ public class ClipboardApiClientTest {
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicReference<String> errorRef = new AtomicReference<>();
 
-        apiClient.getLatestClipboard("http://localhost/api/clipboard/latest/", new ClipboardApiClient.ApiCallback() {
+        apiClient.getLatestClipboard("http://localhost/api/clipboard/latest/", "devtok_test", new ClipboardApiClient.ApiCallback() {
             @Override
             public void onSuccess(String content) {}
 
@@ -158,7 +158,7 @@ public class ClipboardApiClientTest {
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicReference<String> errorRef = new AtomicReference<>();
 
-        apiClient.getLatestClipboard("http://localhost/api/clipboard/latest/", new ClipboardApiClient.ApiCallback() {
+        apiClient.getLatestClipboard("http://localhost/api/clipboard/latest/", "devtok_test", new ClipboardApiClient.ApiCallback() {
             @Override
             public void onSuccess(String content) {}
 
@@ -178,17 +178,19 @@ public class ClipboardApiClientTest {
 
     @Test
     public void testPairDeviceSuccess() throws Exception {
-        OkHttpClient client = createMockHttpClient(200, "{\"status\":\"paired\",\"device_id\":\"android-100\",\"user_id\":42}", null);
+        OkHttpClient client = createMockHttpClient(200, "{\"status\":\"paired\",\"device_id\":\"android-100\",\"credential\":\"devtok_sec123\",\"user_id\":42}", null);
         ClipboardApiClient apiClient = new ClipboardApiClient(client);
 
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicReference<String> statusRef = new AtomicReference<>();
+        final AtomicReference<String> tokenRef = new AtomicReference<>();
         final AtomicInteger userIdRef = new AtomicInteger();
 
         apiClient.pairDevice("http://localhost/api/device/pair/", "AB7K-29XM", "android-100", new ClipboardApiClient.PairCallback() {
             @Override
-            public void onSuccess(String status, int userId) {
+            public void onSuccess(String status, String credential, int userId) {
                 statusRef.set(status);
+                tokenRef.set(credential);
                 userIdRef.set(userId);
                 latch.countDown();
             }
@@ -199,6 +201,7 @@ public class ClipboardApiClientTest {
 
         assertTrue(latch.await(5, TimeUnit.SECONDS));
         assertEquals("paired", statusRef.get());
+        assertEquals("devtok_sec123", tokenRef.get());
         assertEquals(42, userIdRef.get());
     }
 
@@ -213,7 +216,7 @@ public class ClipboardApiClientTest {
 
         apiClient.pairDevice("http://localhost/api/device/pair/", "INVALID", "android-100", new ClipboardApiClient.PairCallback() {
             @Override
-            public void onSuccess(String status, int userId) {}
+            public void onSuccess(String status, String credential, int userId) {}
 
             @Override
             public void onError(int statusCode, String errorMessage) {
@@ -239,7 +242,7 @@ public class ClipboardApiClientTest {
 
         apiClient.pairDevice("http://localhost/api/device/pair/", "AB7K-29XM", "android-100", new ClipboardApiClient.PairCallback() {
             @Override
-            public void onSuccess(String status, int userId) {}
+            public void onSuccess(String status, String credential, int userId) {}
 
             @Override
             public void onError(int statusCode, String errorMessage) {

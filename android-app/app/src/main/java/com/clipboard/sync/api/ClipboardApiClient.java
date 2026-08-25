@@ -32,7 +32,7 @@ public class ClipboardApiClient {
     }
 
     public interface PairCallback {
-        void onSuccess(String status, int userId);
+        void onSuccess(String status, String credential, int userId);
         void onError(int statusCode, String errorMessage);
     }
 
@@ -51,13 +51,16 @@ public class ClipboardApiClient {
      * Perform an HTTP GET request to retrieve the latest clipboard content.
      *
      * @param url      Target REST endpoint URL.
+     * @param token    Authentication device token.
      * @param callback Callback invoked when response is available.
      */
-    public void getLatestClipboard(String url, ApiCallback callback) {
-        Request request = new Request.Builder()
-                .url(url)
-                .get()
-                .build();
+    public void getLatestClipboard(String url, String token, ApiCallback callback) {
+        Request.Builder requestBuilder = new Request.Builder().url(url).get();
+        if (token != null && !token.trim().isEmpty()) {
+            requestBuilder.header("Authorization", "Bearer " + token.trim());
+        }
+
+        Request request = requestBuilder.build();
 
         httpClient.newCall(request).enqueue(new Callback() {
             @Override
@@ -90,6 +93,8 @@ public class ClipboardApiClient {
                         }
                     } else if (statusCode == 404) {
                         if (callback != null) callback.onNotFound();
+                    } else if (statusCode == 401) {
+                        if (callback != null) callback.onError("Invalid or revoked device credential.");
                     } else {
                         if (callback != null) callback.onError("HTTP " + statusCode);
                     }
@@ -99,6 +104,10 @@ public class ClipboardApiClient {
                 }
             }
         });
+    }
+
+    public void getLatestClipboard(String url, ApiCallback callback) {
+        getLatestClipboard(url, null, callback);
     }
 
     /**
@@ -137,15 +146,17 @@ public class ClipboardApiClient {
                         String responseStr = responseBody != null ? responseBody.string() : "";
                         if (statusCode == 200) {
                             String statusVal = "paired";
+                            String credentialVal = "";
                             int userIdVal = 0;
                             if (!responseStr.isEmpty() && responseStr.startsWith("{")) {
                                 statusVal = parseJsonField(responseStr, "status", "paired");
+                                credentialVal = parseJsonField(responseStr, "credential", "");
                                 String userStr = parseJsonField(responseStr, "user_id", "0");
                                 try {
                                     userIdVal = Integer.parseInt(userStr);
                                 } catch (NumberFormatException ignored) {}
                             }
-                            if (callback != null) callback.onSuccess(statusVal, userIdVal);
+                            if (callback != null) callback.onSuccess(statusVal, credentialVal, userIdVal);
                         } else {
                             String errorDetail = "Pairing failed (HTTP " + statusCode + ")";
                             if (!responseStr.isEmpty() && responseStr.startsWith("{")) {
@@ -189,7 +200,6 @@ public class ClipboardApiClient {
                             return jsonString.substring(startQuote + 1, endQuote);
                         }
                     } else {
-                        // Integer / boolean without quotes
                         int comma = jsonString.indexOf(",", colon);
                         int brace = jsonString.indexOf("}", colon);
                         int end = (comma != -1 && comma < brace) ? comma : brace;

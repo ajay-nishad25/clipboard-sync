@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import timedelta
 from django.contrib.auth.models import User
 from django.db import models
@@ -29,6 +30,35 @@ class Device(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user.username} - {self.device_id} ({self.device_type})"
+
+
+class DeviceCredential(models.Model):
+    """An authentication secret token hash associated with a hardware Device."""
+
+    device = models.ForeignKey(
+        Device,
+        on_delete=models.CASCADE,
+        related_name="credentials",
+    )
+    token_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def is_active(self) -> bool:
+        return self.revoked_at is None
+
+    @staticmethod
+    def hash_token(raw_token: str) -> str:
+        """Return the SHA-256 hex digest of a raw token string."""
+        return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+    def __str__(self) -> str:
+        status = "revoked" if self.revoked_at else "active"
+        return f"{self.device.device_id} ({status})"
 
 
 class ClipboardState(models.Model):

@@ -17,15 +17,7 @@ import okhttp3.WebSocketListener;
 
 /**
  * Persistent WebSocket client that sends clipboard.update messages to the
- * Django backend using the Phase 5 protocol.
- *
- * Connection lifecycle:
- * - connect() opens a new WebSocket connection asynchronously.
- * - Callbacks (onOpen, onMessage, onFailure, onClosed) fire on OkHttp's
- *   thread pool; all public methods are thread-safe.
- * - On failure, scheduleReconnect() waits for a backoff period and calls
- *   connect() again. Backoff sequence: 2 → 5 → 15 → 30 seconds (capped).
- * - close() terminates the connection and suppresses further reconnects.
+ * Django backend using authenticated device credentials.
  */
 public class ClipboardWebSocketClient {
 
@@ -34,6 +26,7 @@ public class ClipboardWebSocketClient {
 
     private final String wsBaseUrl;
     private final String deviceId;
+    private final String deviceToken;
     private final StatusListener listener;
     private final OkHttpClient httpClient;
 
@@ -41,14 +34,8 @@ public class ClipboardWebSocketClient {
     private final AtomicBoolean connected = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
-    // Accessed only from the reconnect thread and the WebSocket callbacks;
-    // kept as volatile so the reconnect thread sees the latest value.
     private volatile int backoffIndex = 0;
 
-    /**
-     * Callbacks invoked by the WebSocket client.
-     * All callbacks are invoked on OkHttp's internal thread pool.
-     */
     public interface StatusListener {
         void onConnected();
         void onDisconnected();
@@ -56,9 +43,10 @@ public class ClipboardWebSocketClient {
         void onError(String code, String detail);
     }
 
-    public ClipboardWebSocketClient(String wsBaseUrl, String deviceId, StatusListener listener) {
+    public ClipboardWebSocketClient(String wsBaseUrl, String deviceId, String deviceToken, StatusListener listener) {
         this.wsBaseUrl = wsBaseUrl;
         this.deviceId = deviceId;
+        this.deviceToken = deviceToken != null && !deviceToken.trim().isEmpty() ? deviceToken : deviceId;
         this.listener = listener;
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
@@ -67,12 +55,17 @@ public class ClipboardWebSocketClient {
                 .build();
     }
 
+    public ClipboardWebSocketClient(String wsBaseUrl, String deviceId, StatusListener listener) {
+        this(wsBaseUrl, deviceId, deviceId, listener);
+    }
+
     /** Open a new WebSocket connection asynchronously. */
     public void connect() {
         if (closed.get()) return;
+        String sep = wsBaseUrl.contains("?") ? "&" : "?";
         String url = wsBaseUrl.endsWith("/")
-                ? wsBaseUrl + "?device_id=" + deviceId
-                : wsBaseUrl + "/?device_id=" + deviceId;
+                ? wsBaseUrl + sep + "token=" + deviceToken + "&device_id=" + deviceId
+                : wsBaseUrl + "/" + sep + "token=" + deviceToken + "&device_id=" + deviceId;
         Log.i(TAG, "Connecting to " + url);
         Request request = new Request.Builder().url(url).build();
         httpClient.newWebSocket(request, new InternalListener());
@@ -110,7 +103,6 @@ public class ClipboardWebSocketClient {
 
     /**
      * Gracefully close the connection and suppress further reconnection attempts.
-     * Safe to call more than once.
      */
     public void close() {
         closed.set(true);
@@ -119,7 +111,6 @@ public class ClipboardWebSocketClient {
         if (ws != null) {
             ws.close(1000, "Service stopped.");
         }
-        // Shut down the dispatcher thread pool to release resources.
         httpClient.dispatcher().executorService().shutdown();
     }
 
@@ -184,10 +175,6 @@ public class ClipboardWebSocketClient {
             if (listener != null) listener.onDisconnected();
         }
     }
-
-    // ------------------------------------------------------------------
-    // Reconnection with bounded backoff
-    // ------------------------------------------------------------------
 
     private void scheduleReconnect() {
         if (closed.get()) return;

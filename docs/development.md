@@ -6,7 +6,7 @@ Work on one phase at a time. Before proceeding, run relevant checks, document th
 
 ---
 
-## Current Verified Baseline (Phases 1–9B)
+## Current Verified Baseline (Phases 1–9C)
 
 ### Phase 1 — Desktop Clipboard Detection
 `desktop-agent/` polls OS clipboard via `pyperclip` and logs each distinct text value.
@@ -38,11 +38,14 @@ Desktop Agent recovers `GET /api/clipboard/latest/` on startup/reconnect. Persis
 ### Phase 9B — Desktop ↔ Android Device Pairing
 Temporary pairing code generation (`AB7K-29XM`, 5-min expiration) on Desktop startup (`POST /api/device/pairing/create/`). Android pairing section in `MainActivity` with `POST /api/device/pair/` endpoint associating Android Device with Desktop's owner User.
 
+### Phase 9C — Authenticated Device Credentials & Communication
+Opaque secret token generation (`devtok_...`) with backend SHA-256 hashing (`DeviceCredential`). REST API Bearer token authentication (`Authorization: Bearer <token>`), WebSocket connection token validation (`?token=<token>`), token revocation, and unpair workflow.
+
 ---
 
 ## Component Setup & Testing Commands (Baseline)
 
-### 1. Backend Setup & Tests (43 tests total)
+### 1. Backend Setup & Tests (30 tests total)
 ```powershell
 cd backend
 .\.venv\Scripts\Activate.ps1
@@ -51,7 +54,7 @@ python manage.py makemigrations --check
 python manage.py test
 ```
 
-### 2. Desktop Agent Setup & Tests (45 tests total)
+### 2. Desktop Agent Setup & Tests (46 tests total)
 ```powershell
 cd desktop-agent
 .\.venv\Scripts\Activate.ps1
@@ -71,9 +74,7 @@ cd android-app
 
 - [x] **Phase 9A — Multi-User Data Model & User Isolation**
 - [x] **Phase 9B — Desktop ↔ Android Pairing**
-- [ ] **Phase 9C — Authenticated WebSocket & REST Communication (PLANNED / NEXT)**
-  - Require device authentication tokens for WebSocket connections and REST requests.
-  - Enforce server-side ownership validation for all clipboard operations.
+- [x] **Phase 9C — Authenticated Device Credentials & Communication**
 - [ ] **Phase 9D — Production Configuration & HTTPS/WSS (PLANNED / NEXT)**
   - Support configurable production transport endpoints (`https://` and `wss://`).
   - Enforce TLS in production while retaining local HTTP/WS development options.
@@ -86,5 +87,5 @@ cd android-app
 
 - **Plain Text Only**: No binary, image, screenshot, or rich-text data.
 - **Android Restrictions**: Do NOT attempt background clipboard harvesting on Android 10+. Maintain manual `[ SEND CLIPBOARD ]` and `[ RECEIVE CLIPBOARD ]` UI triggers.
-- **Privacy & Logging**: Clipboard content must never be printed to application logs.
+- **Privacy & Logging**: Raw credentials and clipboard content must never be printed to application logs or stored in plaintext on backend database.
 - **Secret Safety**: Never commit credentials, tokens, or `.env` files to git.

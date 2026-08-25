@@ -37,17 +37,19 @@ python manage.py runserver     # Daphne serves HTTP + WebSocket on http://127.0.
 
 ---
 
-## Current Verified Endpoints (Phases 1–9B Implemented)
+## Current Verified Endpoints (Phases 1–9C Implemented)
 
 ### HTTP REST API
-- `POST /api/clipboard/` — Store a clipboard entry (regression testing).
-- `GET /api/clipboard/latest/?device_id=<id>` — Retrieve newest, non-expired `ClipboardState` belonging to caller device's owner User.
+- `POST /api/clipboard/` — Store a clipboard entry (requires `Authorization: Bearer <device_token>`).
+- `GET /api/clipboard/latest/` — Retrieve newest, non-expired `ClipboardState` belonging to caller's authenticated User (requires `Authorization: Bearer <device_token>`).
+- `POST /api/device/credential/register/` — Register desktop device and obtain device authentication token.
 - `POST /api/device/pairing/create/` — Generate temporary 8-character desktop pairing code (e.g. `AB7K-29XM`, 5-min expiration).
-- `POST /api/device/pair/` — Pair Android device with Desktop's owner User account using a pairing code.
+- `POST /api/device/pair/` — Pair Android device with Desktop's owner User account using a pairing code; returns issued device credential token.
+- `POST /api/device/unpair/` — Revoke device credential token.
 
 ### WebSocket Endpoint
 ```text
-ws://127.0.0.1:8000/ws/clipboard/?device_id=<id>
+ws://127.0.0.1:8000/ws/clipboard/?token=<device_token>&device_id=<device_id>
 ```
 
 #### Supported Messages
@@ -55,18 +57,17 @@ ws://127.0.0.1:8000/ws/clipboard/?device_id=<id>
 - `clipboard.update`: Client outbound clipboard update (`clipboard.ack`).
 - `clipboard.remote_update`: Server-side broadcast to user-scoped channel group (`clipboard_user_<user_id>`).
 
-### Automated Verification (43 tests)
+### Automated Verification (30 tests)
 ```powershell
 python manage.py check
 python manage.py makemigrations --check
 python manage.py test
 ```
-Expected: **43 tests**, all passing (`OK`).
+Expected: **30 tests**, all passing (`OK`).
 
 ---
 
 ## Phase 9 Remaining Roadmap (PLANNED / NEXT)
 
-- **Phase 9C**: Device Token Authentication (`wss://` and REST API Bearer tokens).
-- **Phase 9D**: Production Configuration & HTTPS/WSS (TLS).
+- **Phase 9D**: Production Configuration & HTTPS/WSS (TLS certificate validation).
 - **Phase 9E**: PostgreSQL, Redis Channel Layer, and deployment hardening.
