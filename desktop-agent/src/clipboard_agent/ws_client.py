@@ -16,6 +16,7 @@ from websockets.sync.client import ClientConnection, connect
 _BACKOFF_DELAYS = (2, 5, 15, 30)
 
 RemoteUpdateHandler = Callable[[str, str], object]
+ConnectionHandler = Callable[[], object]
 
 
 class ClipboardWebSocketClient:
@@ -34,11 +35,13 @@ class ClipboardWebSocketClient:
         device_id: str,
         logger: logging.Logger,
         on_remote_update: RemoteUpdateHandler | None = None,
+        on_connected: ConnectionHandler | None = None,
     ) -> None:
         self._base_url = ws_url.rstrip("/") + "/"
         self._device_id = device_id
         self._logger = logger
         self._on_remote_update = on_remote_update
+        self._on_connected = on_connected
 
         self._connection: ClientConnection | None = None
         self._connection_lock = threading.RLock()
@@ -152,6 +155,12 @@ class ClipboardWebSocketClient:
 
     def _listen_loop(self) -> None:
         """Background listener thread reading incoming WebSocket messages."""
+        if self._on_connected is not None:
+            try:
+                self._on_connected()
+            except Exception:
+                self._logger.exception("Error in on_connected handler.")
+
         while self._running:
             conn = self._connection
             if conn is None:

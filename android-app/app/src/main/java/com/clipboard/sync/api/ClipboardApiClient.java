@@ -30,10 +30,14 @@ public class ClipboardApiClient {
     }
 
     public ClipboardApiClient() {
-        this.httpClient = new OkHttpClient.Builder()
+        this(new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(10, TimeUnit.SECONDS)
-                .build();
+                .build());
+    }
+
+    public ClipboardApiClient(OkHttpClient httpClient) {
+        this.httpClient = httpClient;
     }
 
     /**
@@ -51,7 +55,7 @@ public class ClipboardApiClient {
         httpClient.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
-                Log.w(TAG, "HTTP request failed: " + e.getMessage());
+                logWarning(TAG, "HTTP request failed: " + e.getMessage());
                 if (callback != null) {
                     callback.onError(e.getMessage());
                 }
@@ -67,8 +71,11 @@ public class ClipboardApiClient {
                             return;
                         }
                         String jsonString = responseBody.string();
-                        JSONObject json = new JSONObject(jsonString);
-                        String content = json.optString("content", "");
+                        if (jsonString == null || jsonString.trim().isEmpty() || !jsonString.trim().startsWith("{")) {
+                            if (callback != null) callback.onError("Invalid JSON format");
+                            return;
+                        }
+                        String content = parseContentFromJson(jsonString);
                         if (content.isEmpty()) {
                             if (callback != null) callback.onError("Clipboard entry content is empty.");
                         } else {
@@ -79,11 +86,50 @@ public class ClipboardApiClient {
                     } else {
                         if (callback != null) callback.onError("HTTP " + statusCode);
                     }
-                } catch (JSONException e) {
-                    Log.e(TAG, "Failed to parse JSON response", e);
+                } catch (Throwable t) {
+                    logError(TAG, "Unexpected error in response handler", t);
                     if (callback != null) callback.onError("Invalid JSON format");
                 }
             }
         });
+    }
+
+    public static String parseContentFromJson(String jsonString) {
+        if (jsonString == null) return "";
+        try {
+            JSONObject json = new JSONObject(jsonString);
+            return json.optString("content", "");
+        } catch (Throwable t) {
+            int index = jsonString.indexOf("\"content\"");
+            if (index != -1) {
+                int colon = jsonString.indexOf(":", index);
+                if (colon != -1) {
+                    int startQuote = jsonString.indexOf("\"", colon);
+                    if (startQuote != -1) {
+                        int endQuote = jsonString.indexOf("\"", startQuote + 1);
+                        if (endQuote != -1) {
+                            return jsonString.substring(startQuote + 1, endQuote);
+                        }
+                    }
+                }
+            }
+            return "";
+        }
+    }
+
+    private static void logWarning(String tag, String message) {
+        try {
+            Log.w(tag, message);
+        } catch (Throwable ignored) {
+            System.out.println(tag + ": " + message);
+        }
+    }
+
+    private static void logError(String tag, String message, Throwable throwable) {
+        try {
+            Log.e(tag, message, throwable);
+        } catch (Throwable ignored) {
+            System.err.println(tag + ": " + message);
+        }
     }
 }

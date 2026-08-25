@@ -107,7 +107,7 @@ public class ClipboardMonitorService extends Service {
     private void initWebSocket() {
         wsClient = new ClipboardWebSocketClient(
                 Config.WS_BASE_URL,
-                Config.DEVICE_ID,
+                Config.getDeviceId(this),
                 new ClipboardWebSocketClient.StatusListener() {
 
                     @Override

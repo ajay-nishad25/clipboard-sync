@@ -8,11 +8,12 @@ import time
 import unittest
 from unittest.mock import MagicMock, Mock, call, patch
 
+from clipboard_agent.cli import fetch_latest_clipboard_text
 from clipboard_agent.monitor import ClipboardMonitor
 from clipboard_agent.ws_client import ClipboardWebSocketClient, _BACKOFF_DELAYS
 
 
-def _make_client(ws_url: str = "ws://127.0.0.1:8000/ws/clipboard/", on_remote_update=None) -> ClipboardWebSocketClient:
+def _make_client(ws_url: str = "ws://127.0.0.1:8000/ws/clipboard/", on_remote_update=None, on_connected=None) -> ClipboardWebSocketClient:
     logger = logging.getLogger(f"test.ws_client.{ws_url}")
     logger.propagate = False
     return ClipboardWebSocketClient(
@@ -20,6 +21,7 @@ def _make_client(ws_url: str = "ws://127.0.0.1:8000/ws/clipboard/", on_remote_up
         device_id="desktop-001",
         logger=logger,
         on_remote_update=on_remote_update,
+        on_connected=on_connected,
     )
 
 
@@ -125,6 +127,30 @@ class ClipboardWebSocketClientSendTests(unittest.TestCase):
 
         handler.assert_called_once_with("android-001", "Hello from Android")
         client.close()
+
+    def test_on_connected_invoked_on_connection(self) -> None:
+        handler = Mock()
+        client = _make_client(on_connected=handler)
+        conn = Mock()
+        conn.recv.side_effect = Exception("closed")
+
+        with patch("clipboard_agent.ws_client.connect", return_value=conn):
+            self.assertTrue(client._ensure_connected())
+            time.sleep(0.1)
+
+        handler.assert_called_once()
+        client.close()
+
+    def test_fetch_latest_clipboard_text_parses_json(self) -> None:
+        response_mock = Mock()
+        response_mock.status = 200
+        response_mock.read.return_value = json.dumps({"content": "Recovered text"}).encode("utf-8")
+        response_mock.__enter__ = Mock(return_value=response_mock)
+        response_mock.__exit__ = Mock(return_value=None)
+
+        with patch("urllib.request.urlopen", return_value=response_mock):
+            content = fetch_latest_clipboard_text("http://127.0.0.1:8000/api/clipboard/latest/")
+            self.assertEqual(content, "Recovered text")
 
 
 class ClipboardWebSocketClientConnectionTests(unittest.TestCase):

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import urllib.request
 
 import pyperclip
 
@@ -45,6 +47,25 @@ def read_clipboard_text() -> str:
     return pyperclip.paste()
 
 
+def fetch_latest_clipboard_text(rest_latest_url: str, timeout_seconds: float = 5.0) -> str | None:
+    """Fetch the most recent clipboard text entry from the Django REST API."""
+    try:
+        request = urllib.request.Request(
+            rest_latest_url,
+            headers={"User-Agent": "ClipboardDesktopAgent/1.0", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            if response.status == 200:
+                data = json.loads(response.read().decode("utf-8"))
+                if isinstance(data, dict):
+                    content = data.get("content")
+                    if isinstance(content, str) and content:
+                        return content
+    except Exception:
+        pass
+    return None
+
+
 def main() -> None:
     """Run the local clipboard monitoring loop."""
     arguments = parse_arguments()
@@ -55,6 +76,8 @@ def main() -> None:
         logger.error("Invalid desktop-agent configuration: %s", error)
         return
 
+    logger.info("Using device ID: %s", config.device_id)
+
     monitor: ClipboardMonitor | None = None
 
     def handle_remote_update(device_id: str, content: str) -> None:
@@ -63,11 +86,23 @@ def main() -> None:
             monitor.set_last_content(content)
             logger.info("Updated Windows system clipboard from remote device %s.", device_id)
 
+    def handle_connected() -> None:
+        if monitor is not None and config.rest_latest_url:
+            content = fetch_latest_clipboard_text(
+                rest_latest_url=config.rest_latest_url,
+                timeout_seconds=config.timeout_seconds,
+            )
+            if content:
+                pyperclip.copy(content)
+                monitor.set_last_content(content)
+                logger.info("Recovered latest remote clipboard entry on connect (%d chars).", len(content))
+
     ws_client = ClipboardWebSocketClient(
         ws_url=config.ws_url,
         device_id=config.device_id,
         logger=logger,
         on_remote_update=handle_remote_update,
+        on_connected=handle_connected,
     )
     monitor = ClipboardMonitor(
         read_clipboard=read_clipboard_text,

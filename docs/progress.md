@@ -8,6 +8,7 @@
 - [x] Phase 5 — Desktop Real-Time WebSocket Sync
 - [x] Phase 6 — Android Application
 - [x] Phase 7 — Server-Side Broadcasting & Remote Desktop Clipboard Update
+- [x] Phase 8 — Desktop Catch-Up, Persistent Device Identity & Android Testing
 
 ## Phase 0 outcome
 
@@ -88,3 +89,17 @@ Verification results:
 - Backend: 17/17 tests passing (including 2 new broadcasting tests).
 - Desktop Agent: 39/39 unit tests passing (including loop suppression and remote update callback tests).
 - Android: 22/22 Gradle tasks UP-TO-DATE, unit tests passing, APK assembleDebug successful. 0 Android files modified.
+
+## Phase 8 outcome
+
+Implemented Desktop Catch-Up, Persistent Device Identity, and Android Unit Tests:
+- **Desktop Catch-Up on Connection/Reconnect**: When Desktop Agent connects or reconnects over WebSocket, it fetches the latest entry from `GET /api/clipboard/latest/` via HTTP. If a valid entry exists, it applies it to the Windows clipboard via `pyperclip.copy(content)` and updates `monitor.set_last_content(content)`. This recovers missed clips sent while Desktop was offline without triggering outbound re-synchronization.
+- **Desktop Configuration**: Added `rest_latest_url` field to `AgentConfig` (default `http://127.0.0.1:8000/api/clipboard/latest/`, override `CLIPBOARD_REST_LATEST_URL`).
+- **Persistent Desktop Device ID**: Auto-generates a persistent UUID (`desktop-<uuid>`) saved to `~/.clipboard_sync/device_id.txt` on first launch. Reused on subsequent runs. `CLIPBOARD_DEVICE_ID` environment variable continues to override.
+- **Persistent Android Device ID**: Auto-generates a persistent UUID (`android-<uuid>`) saved in Android `SharedPreferences` via `Config.getDeviceId(Context)`.
+- **Android Unit Testing**: Added `ClipboardApiClientTest.java` covering successful 200 response, JSON extraction, 404 response, network failure, and malformed JSON format.
+
+Verification results:
+- Backend: 17/17 tests passing.
+- Desktop Agent: 43/43 unit tests passing.
+- Android: 9 unit tests passing (`ClipboardApiClientTest` + `ConfigTest`), APK build successful.
