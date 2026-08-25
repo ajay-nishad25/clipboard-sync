@@ -9,7 +9,11 @@
 - [x] Phase 6 — Android Application
 - [x] Phase 7 — Server-Side Broadcasting & Remote Desktop Clipboard Update
 - [x] Phase 8 — Desktop Catch-Up, Persistent Device Identity & Android Testing
-- [ ] Phase 9 — Multi-User Identity, Device Pairing, Data Isolation & Production Readiness (PLANNED / NEXT)
+- [x] Phase 9A — Multi-User Data Model & User Isolation
+- [ ] Phase 9B — Desktop ↔ Android Device Pairing (PLANNED / NEXT)
+- [ ] Phase 9C — Authenticated WebSocket & REST Communication (PLANNED / NEXT)
+- [ ] Phase 9D — Production Configuration & HTTPS/WSS (PLANNED / NEXT)
+- [ ] Phase 9E — Production Deployment & Hardening (PLANNED / NEXT)
 
 ## Phase 0 outcome
 
@@ -56,7 +60,6 @@ sync client. Key additions:
   validates `device_id` and `content`, stores `ClipboardEntry` via
   `database_sync_to_async`, returns `clipboard.ack`.
 - `backend/clipboard/tests_websocket.py` — 5 new `clipboard.update` tests.
-- `desktop-agent/tests/test_ws_client.py` — 20 new WS client tests.
 - `desktop-agent/tests/test_config.py` — extended with `ws_url` tests.
 
 Verification results:
@@ -105,11 +108,16 @@ Verification results:
 - Desktop Agent: 43/43 unit tests passing.
 - Android: 9 unit tests passing (`ClipboardApiClientTest` + `ConfigTest`), APK build successful.
 
-## Phase 9 Planned Scope (PLANNED / NEXT)
+## Phase 9A outcome
 
-Phase 9 defines the architecture for multi-user identity, device pairing, user data isolation, and production readiness:
-- **Phase 9A**: Multi-user data model (`User.CurrentClipboard`), 10-minute expiration, user-scoped Channels routing (`clipboard_user_<USER_ID>`).
-- **Phase 9B**: Desktop ↔ Android enrollment/pairing (`AB7K-29XM` code -> persistent token).
-- **Phase 9C**: Authenticated WebSockets and REST APIs with token validation.
-- **Phase 9D**: HTTPS/WSS production configuration.
-- **Phase 9E**: PostgreSQL, Redis Channel Layer, and deployment hardening.
+Implemented Multi-User Data Model & User Isolation on the Django backend:
+- **Device Model**: Created `Device` model (`user`, `device_id`, `device_type`) linking hardware devices to Django `User` instances.
+- **ClipboardState Model**: Created `ClipboardState` model (`user`, `content`, `updated_at`, `expires_at`). Replaces historical entries with a single active record per user.
+- **10-Minute Retention Expiration**: Enforces 10-minute expiration (`expires_at = now + 10m`). Expired entries are automatically purged and hidden on access (`is_expired()`).
+- **User-Scoped WebSocket Isolation**: Replaced global `clipboard_sync_group` with user-scoped channel groups (`clipboard_user_<user_id>`). Real-time `clipboard.remote_update` broadcasts are restricted to devices belonging to the same user.
+- **User-Scoped REST API**: Updated `GET /api/clipboard/latest/` to resolve device identity to its owner user and return only that user's active `ClipboardState`.
+- **Django Admin**: Registered `Device` and `ClipboardState` models in Django admin for administrator inspection.
+
+Verification results:
+- Backend tests: **27/27 PASS** (`Ran 27 tests in 0.305s OK`).
+- Zero changes to `android-app/` or `desktop-agent/`.

@@ -1,8 +1,57 @@
+from __future__ import annotations
+
+from datetime import timedelta
+from django.contrib.auth.models import User
 from django.db import models
+from django.utils import timezone
+
+
+class DeviceType(models.TextChoices):
+    DESKTOP = "desktop", "Desktop"
+    ANDROID = "android", "Android"
+
+
+class Device(models.Model):
+    """A registered hardware device belonging to a User."""
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="devices")
+    device_id = models.CharField(max_length=100, unique=True)
+    device_type = models.CharField(
+        max_length=20,
+        choices=DeviceType.choices,
+        default=DeviceType.DESKTOP,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        return f"{self.user.username} - {self.device_id} ({self.device_type})"
+
+
+class ClipboardState(models.Model):
+    """The single active text clipboard state for a User with 10-minute expiration."""
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="clipboard_state",
+    )
+    content = models.TextField()
+    updated_at = models.DateTimeField(auto_now=True)
+    expires_at = models.DateTimeField()
+
+    def is_expired(self) -> bool:
+        return timezone.now() >= self.expires_at
+
+    def __str__(self) -> str:
+        return f"{self.user.username}: {self.content[:30]} (expires {self.expires_at})"
 
 
 class ClipboardEntry(models.Model):
-    """A text clipboard value received from a development device."""
+    """Legacy historical log of clipboard values received from development devices."""
 
     device_id = models.CharField(max_length=100)
     content = models.TextField()

@@ -1,4 +1,4 @@
-"""WebSocket consumer for the clipboard application."""
+"""WebSocket consumer for user-isolated clipboard synchronization."""
 
 from __future__ import annotations
 
@@ -10,30 +10,43 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 from clipboard.models import ClipboardEntry
+from clipboard.services import resolve_device_and_user, set_user_clipboard
 
 logger = logging.getLogger(__name__)
 
 
-GROUP_NAME = "clipboard_sync_group"
-
-
 class ClipboardConsumer(AsyncWebsocketConsumer):
-    """Handle WebSocket connections for clipboard synchronization.
+    """Handle WebSocket connections for clipboard synchronization with user data isolation.
 
     Supported message types:
-    - test.message  — Phase 4 connectivity test, echoes back a test.ack.
-    - clipboard.update — Phase 5: store text clipboard content, return clipboard.ack,
-      and broadcast a clipboard.remote_update to other connected clients (Phase 7).
+    - test.message — Connectivity test, echoes back test.ack.
+    - clipboard.update — Store text clipboard content in user's ClipboardState,
+      return clipboard.ack, and broadcast clipboard.remote_update ONLY to devices
+      belonging to the SAME user (user-scoped group: clipboard_user_<user_id>).
     """
 
     async def connect(self) -> None:
         self.device_id = self._get_device_id()
-        await self.channel_layer.group_add(GROUP_NAME, self.channel_name)
+        self.device, self.user = None, None
+        self.group_name = None
+
+        if self.device_id:
+            self.device, self.user = await database_sync_to_async(resolve_device_and_user)(self.device_id)
+
+        if self.user:
+            self.group_name = f"clipboard_user_{self.user.id}"
+            await self.channel_layer.group_add(self.group_name, self.channel_name)
+
         await self.accept()
-        logger.info("WebSocket connection accepted for device %s.", self.device_id or "unknown")
+        logger.info(
+            "WebSocket connection accepted for device %s (User %s).",
+            self.device_id or "unknown",
+            self.user.username if self.user else "none",
+        )
 
     async def disconnect(self, close_code: int) -> None:
-        await self.channel_layer.group_discard(GROUP_NAME, self.channel_name)
+        if self.group_name:
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
         logger.info(
             "WebSocket disconnected for device %s with code %s.",
             getattr(self, "device_id", None) or "unknown",
@@ -76,7 +89,6 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
 
         logger.info("WebSocket test message received from device %s.", self.device_id or "unknown")
         await self.send(text_data=json.dumps({"type": "test.ack", "message": text}))
-        logger.info("WebSocket acknowledgement sent to device %s.", self.device_id or "unknown")
 
     async def _handle_clipboard_update(self, message: dict) -> None:
         device_id = message.get("device_id")
@@ -95,21 +107,40 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
             )
             return
 
+        device, user = await database_sync_to_async(resolve_device_and_user)(device_id)
+        if not user:
+            await self._send_error("invalid_device", "Device ID is not associated with a user.")
+            return
+
+        # Ensure consumer is joined to the user's channel group
+        user_group = f"clipboard_user_{user.id}"
+        if self.group_name != user_group:
+            if self.group_name:
+                await self.channel_layer.group_discard(self.group_name, self.channel_name)
+            self.group_name = user_group
+            await self.channel_layer.group_add(self.group_name, self.channel_name)
+
+        # Replace active ClipboardState for user (10-minute expiration)
+        await database_sync_to_async(set_user_clipboard)(user, content)
+
+        # Store legacy ClipboardEntry log
         await database_sync_to_async(ClipboardEntry.objects.create)(
             device_id=device_id,
             content=content,
         )
-        logger.info("Clipboard entry stored from device %s via WebSocket.", device_id)
 
+        logger.info("ClipboardState updated for user %s via device %s.", user.username, device_id)
+
+        # Send ACK to sender
         await self.send(
             text_data=json.dumps(
                 {"type": "clipboard.ack", "device_id": device_id, "status": "stored"}
             )
         )
-        logger.info("Clipboard acknowledgement sent to device %s.", device_id)
 
+        # Broadcast remote_update ONLY to user's isolated channel group
         await self.channel_layer.group_send(
-            GROUP_NAME,
+            user_group,
             {
                 "type": "clipboard_broadcast",
                 "sender_device_id": device_id,
@@ -118,7 +149,7 @@ class ClipboardConsumer(AsyncWebsocketConsumer):
         )
 
     async def clipboard_broadcast(self, event: dict) -> None:
-        """Broadcast a remote clipboard update to connected clients except the sender."""
+        """Broadcast a remote clipboard update to connected devices belonging to the same user."""
         sender_device_id = event.get("sender_device_id")
         if sender_device_id != self.device_id:
             content = event.get("content", "")
